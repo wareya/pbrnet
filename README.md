@@ -8,7 +8,9 @@ Can output ORM, MRO, or separate textures per feature. Feature-generic: can be t
 
 Roughness and AO outputs are decent. Metalness output is somewhat poor, but there's an parameter for hinting at it whether the image has significant metal or not or whether you don't know.
 
-It's python but it uses uv so it's not as awful to use as most python programs. If you REALLY want, there's a fully in-browser no-server version you can test with, but note that it's like 10x slower.
+It's python but it uses uv so it's not as awful to use as most python programs.
+
+If you REALLY want, there's a fully in-browser no-server version you can test with, but note that it's like 10x slower. https://wareya.github.io/pbrnet/
 
 ```
 # convert every file textures/*.dds
