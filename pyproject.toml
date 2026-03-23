@@ -1,0 +1,14 @@
+[project]
+name = "pbr-pixel-net"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pillow>=10.0.0",
+    "numpy>=1.26.0",
+    "torch>=2.6.0",
+    "flask>=3.0.0",
+]
+
+# AMD GPU on Windows: after uv sync, follow pytorch.org to install the ROCm
+# torch wheel manually, e.g.:
+#   pip install torch --index-url https://download.pytorch.org/whl/rocm6.2
