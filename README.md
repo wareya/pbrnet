@@ -2,11 +2,13 @@
 
 (AI slop -- made by claude webchat -- probably public domain under US law -- model trained only on public domain material)
 
+AI texture to PBR material converter/synthesizer.
+
 Oldschool non-latent non-convolutional neural network for making PBR roughness/metalness/ambient occlusion data from color/diffuse/albedo textures. Trained only on public domain material.
 
 **This is *not* a generative AI tool.** It's a granular categorization tool with a model so small it can't *possibly* be memorizing and storing the training data.
 
-Can output ORM, MRO, or separate textures per feature. Feature-generic: can be trained to recognize other analog features as instead of just ORM.
+Can output ORM, MRO, or separate textures per feature. Feature-generic: can be trained to recognize other granular features and not just ORM, and training is fast, even on CPU.
 
 Roughness and AO outputs are decent. Metalness output is somewhat poor, but there's an parameter for hinting at it whether the image has significant metal or not or whether you don't know.
 
