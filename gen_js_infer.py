@@ -90,6 +90,7 @@ def build_html(layers_json):
     # we use a different delimiter and avoid backslash sequences in string literals.
     # All JS string splitting uses indexOf/substring rather than regex or \n.
     return """<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -151,6 +152,8 @@ label { font-size: 0.8em; color: #888; }
       </div>
       <div>
         <label><input type="checkbox" id="use-wasm" checked> Use WASM</label>
+        <label><input type="checkbox" id="use-parallel" checked> Use threads</label>
+        <br>
         <button id="run-btn" disabled>Run Inference</button>
         <button id="cancel-btn" disabled>Cancel</button>
       </div>
@@ -184,100 +187,362 @@ const LAYERS = LAYER_SPECS.map(s => ({
   b: b64ToF32(s.b),
 }));
 
-// ── WASM SIMD MLP ─────────────────────────────────────────────────────────────
-const WASM_B64 = 'AGFzbQEAAAABEQRgAXwBfGAAAGAAAX1gAAF/AhMBA2VudgtzaWdtb2lkX2Y2NAAAAxQTAQEBAQECAgIDAwMDAwMDAwMDAwUDAQAKB+gBFAZtZW1vcnkCAAZsYXllcjAAAQZsYXllcjEAAgZsYXllcjIAAwZsYXllcjMABAZsYXllcjQABQhnZXRfaDRfMAAGCGdldF9oNF8xAAcIZ2V0X2g0XzIACAtmZWF0X29mZnNldAAJCkwwd19vZmZzZXQACgpMMGJfb2Zmc2V0AAsKTDF3X29mZnNldAAMCkwxYl9vZmZzZXQADQpMMndfb2Zmc2V0AA4KTDJiX29mZnNldAAPCkwzd19vZmZzZXQAEApMM2Jfb2Zmc2V0ABEKTDR3X29mZnNldAASCkw0Yl9vZmZzZXQAEwr4BxPBAQMDfwF7AX1BACEAAkADQCAAQYACTw0BQQAgAEGQDWxqIQJDAAAAAP0TIQNBACEBAkADQCABQekATw0BIAMgAiABQRBsav0ABABB0LQkIAFBEGxq/QAEAP3mAf3kASEDIAFBAWohAQwACwsgA/0fACAD/R8BkiAD/R8CIAP9HwOSkiEEIARBgKAaIABBBGxqKgIAkiEEQeDBJCAAQQRsaiAEIARDCtcjPJQgBEMAAAAAYBs4AgAgAEEBaiEADAALCwvDAQMDfwF7AX1BACEAAkADQCAAQYABTw0BQYCoGiAAQYAIbGohAkMAAAAA/RMhA0EAIQECQANAIAFBwABPDQEgAyACIAFBEGxq/QAEAEHgwSQgAUEQbGr9AAQA/eYB/eQBIQMgAUEBaiEBDAALCyAD/R8AIAP9HwGSIAP9HwIgA/0fA5KSIQQgBEGAqCIgAEEEbGoqAgCSIQRB4MkkIABBBGxqIAQgBEMK1yM8lCAEQwAAAABgGzgCACAAQQFqIQAMAAsLC8IBAwN/AXsBfUEAIQACQANAIABBwABPDQFBgKwiIABBgARsaiECQwAAAAD9EyEDQQAhAQJAA0AgAUEgTw0BIAMgAiABQRBsav0ABABB4MkkIAFBEGxq/QAEAP3mAf3kASEDIAFBAWohAQwACwsgA/0fACAD/R8BkiAD/R8CIAP9HwOSkiEEIARBgKwkIABBBGxqKgIAkiEEQeDNJCAAQQRsaiAEIARDCtcjPJQgBEMAAAAAYBs4AgAgAEEBaiEADAALCwu0AQMDfwF7AX1BACEAAkADQCAAQQNPDQFBgK4kIABBgAJsaiECQwAAAAD9EyEDQQAhAQJAA0AgAUEQTw0BIAMgAiABQRBsav0ABABB4M0kIAFBEGxq/QAEAP3mAf3kASEDIAFBAWohAQwACwsgA/0fACAD/R8BkiAD/R8CIAP9HwOSkiEEIARBgLQkIABBBGxqKgIAkiEEQeDPJCAAQQRsaiAEuxAAtjgCACAAQQFqIQAMAAsLC4oBAgJ/AX1BACEAAkADQCAAQQNPDQFBwLQkIABBBGxqKgIAIQJBACEBAkADQCABQQNPDQEgAkGQtCQgAEEDbCABakEEbGoqAgBB4M8kIAFBBGxqKgIAlJIhAiABQQFqIQEMAAsLQfDPJCAAQQRsakMAAIA/QwAAAAAgApeWOAIAIABBAWohAAwACwsLCQBB8M8kKgIACwkAQfTPJCoCAAsJAEH4zyQqAgALBgBB0LQkCwQAQQALBgBBgKAaCwYAQYCoGgsGAEGAqCILBgBBgKwiCwYAQYCsJAsGAEGAriQLBgBBgLQkCwYAQZC0JAsGAEHAtCQL';
+// Pre-compiles and instantiates the Wasm module.
+// Returns the exported functions and memory.
+const wasmBase64 = "AGFzbQEAAAABCgFgBn9/f39/fwADAgEABQMBAAEHEwIGbWVtb3J5AgAGbWF0bXVsAAAK3gEB2wEDA38BewF9QQAhBgJAA0AgBiADTw0BQwAAAAD9EyEJIAYgAWwhCEEAIQcCQANAIAdBA2ogAUsNASAJIAQgCCAHakECdGr9AAQAIAAgB0ECdGr9AAQA/eYB/eQBIQkgB0EEaiEHDAALCyAJ/R8AIAn9HwGSIAn9HwIgCf0fA5KSIQoCQANAIAcgAU8NASAKIAQgCCAHakECdGoqAgAgACAHQQJ0aioCAJSSIQogB0EBaiEHDAALCyACIAZBAnRqIAogBSAGQQJ0aioCAJI4AgAgBkEBaiEGDAALCwsAQwRuYW1lAjwBAAsAA2hpbgEGaGlubGVuAgRob3V0Awdob3V0bGVuBAJ3MQUCYjEGAWkHAWoIAXEJBXZfYWNjCgNzdW0=";
 
-let wasmMlp = null;  // set after init
-let wasmMem = null;
-let wasmFeat = null; // Float32Array view into wasm memory at feat offset
-
-function b64ToBytes(b64) {
-  const bin = atob(b64);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
+function initWasm() {
+  const binary = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
+  const mod = new WebAssembly.Module(binary);
+  const instance = new WebAssembly.Instance(mod);
+  
+  let ret = {wasmMatmul : instance.exports.matmul, wasmMemory : instance.exports.memory };
+  return ret;
 }
 
-async function initWasm() {
-  const bytes = b64ToBytes(WASM_B64);
-  const result = await WebAssembly.instantiate(bytes, {
-    env: {
-      sigmoid_f64: (x) => 1.0 / (1.0 + Math.exp(-x)),
-    }
-  });
-  const exp = result.instance.exports;
-  wasmMem = new Float32Array(exp.memory.buffer);
-  // Copy weights and biases into WASM memory
-  const layerOffsets = [
-    [exp.L0w_offset(), exp.L0b_offset()],
-    [exp.L1w_offset(), exp.L1b_offset()],
-    [exp.L2w_offset(), exp.L2b_offset()],
-    [exp.L3w_offset(), exp.L3b_offset()],
-    [exp.L4w_offset(), exp.L4b_offset()],
-  ];
-  for (let i = 0; i < 5; i++) {
-    const [wo, bo] = layerOffsets[i];
-    wasmMem.set(LAYERS[i].w, wo / 4);
-    wasmMem.set(LAYERS[i].b, bo / 4);
+const FEATURE_SIZE = '""" + f"{INPUT_DIM}" + """';
+
+let wasm;
+
+function wasm_matmul(wasm, hin, hinlen, hout, houtlen, w1, b1) {
+  const f32Size = 4;
+  
+  const p_hin = 0;
+  const p_hout = p_hin + hinlen * f32Size;
+  const p_w1 = p_hout + houtlen * f32Size;
+  const p_b1 = p_w1 + (hinlen * houtlen) * f32Size;
+  const bytesNeeded = p_b1 + houtlen * f32Size;
+
+  if (wasm.wasmMemory.buffer.byteLength < bytesNeeded) {
+    const pagesNeeded = Math.ceil(bytesNeeded / 65536);
+    const currentPages = wasm.wasmMemory.buffer.byteLength / 65536;
+    wasm.wasmMemory.grow(pagesNeeded - currentPages);
   }
-  wasmFeat = wasmMem.subarray(exp.feat_offset() / 4, exp.feat_offset() / 4 + 420);
-  wasmMlp = {
-    layer0: exp.layer0, layer1: exp.layer1, layer2: exp.layer2,
-    layer3: exp.layer3, layer4: exp.layer4,
-    get_h4_0: exp.get_h4_0, get_h4_1: exp.get_h4_1, get_h4_2: exp.get_h4_2,
-  };
-  statusEl.textContent = 'Weights loaded (WASM). Select an image to begin.';
+
+  const memF32 = new Float32Array(wasm.wasmMemory.buffer);
+
+  // Transfer data into linear memory
+  memF32.set(hin, p_hin / f32Size);
+  memF32.set(w1,  p_w1 / f32Size);
+  memF32.set(b1,  p_b1 / f32Size);
+
+  // Execute Wasm function
+  wasm.wasmMatmul(p_hin, hinlen, p_hout, houtlen, p_w1, p_b1);
+
+  // Pull result back to JS array
+  hout.set(new Float32Array(wasm.wasmMemory.buffer, p_hout, houtlen));
+}
+let __wasmPool = null;
+
+async function parallel_wasm_matmul(wasm, hin, hinlen, hout, houtlen, w1, b1) {
+  const numThreads = 1;
+
+  // 1. Internal Initialization (Runs only once)
+  if (!__wasmPool) {
+    const workerCode = `
+      let instance;
+      onmessage = async (e) => {
+        const { type, wasmBase64, task } = e.data;
+        if (type === 'INIT') {
+          const bytes = Uint8Array.from(atob(wasmBase64), c => c.charCodeAt(0));
+          const mod = await WebAssembly.compile(bytes);
+          instance = await WebAssembly.instantiate(mod);
+          postMessage({ type: 'READY' });
+          return;
+        }
+        if (type === 'RUN') {
+          console.log('starting work!');
+          const { hin, hinlen, houtlen, w1, b1, startRow } = task;
+          const f32 = 4;
+          const p_hin = 0;
+          const p_hout = p_hin + hinlen * f32;
+          const p_w1 = p_hout + houtlen * f32;
+          const p_b1 = p_w1 + (hinlen * houtlen) * f32;
+          
+          const mem = instance.exports.memory;
+          const req = p_b1 + (houtlen * f32);
+          if (mem.buffer.byteLength < req) mem.grow(Math.ceil((req - mem.buffer.byteLength) / 65536));
+          
+          const memF32 = new Float32Array(mem.buffer);
+          memF32.set(hin, p_hin / f32);
+          memF32.set(w1, p_w1 / f32);
+          memF32.set(b1, p_b1 / f32);
+
+          instance.exports.matmul(p_hin, hinlen, p_hout, houtlen, p_w1, p_b1);
+
+          const res = new Float32Array(mem.buffer, p_hout, houtlen).slice();
+          postMessage({ res, startRow }, [res.buffer]);
+        }
+      };
+    `;
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+    
+    __wasmPool = await Promise.all(Array.from({ length: numThreads }, () => {
+      const w = new Worker(url);
+      return new Promise(res => {
+        w.onmessage = (e) => { if (e.data.type === 'READY') res(w); };
+        w.postMessage({ type: 'INIT', wasmBase64: wasmBase64 });
+      });
+    }));
+    URL.revokeObjectURL(url);
+  }
+
+  // 2. Splitting Logic
+  const rowsPerThread = Math.floor(houtlen / numThreads);
+  const tasks = __wasmPool.map((worker, i) => {
+    const startRow = i * rowsPerThread;
+    const endRow = (i === numThreads - 1) ? houtlen : (i + 1) * rowsPerThread;
+    const threadHoutLen = endRow - startRow;
+
+    // Use subarrays to avoid full memory copies where possible before transfer
+    const w1Chunk = w1.slice(startRow * hinlen, endRow * hinlen);
+    const b1Chunk = b1.slice(startRow, endRow);
+
+    return new Promise(resolve => {
+      worker.onmessage = (e) => {
+        hout.set(e.data.res, e.data.startRow);
+        resolve();
+      };
+      worker.postMessage({
+        type: 'RUN',
+        task: { hin, hinlen, houtlen: threadHoutLen, w1: w1Chunk, b1: b1Chunk, startRow }
+      }, [w1Chunk.buffer, b1Chunk.buffer]);
+    });
+  });
+
+  await Promise.all(tasks);
 }
 
-initWasm().then(() => {}).catch(e => {
-  console.warn('WASM init failed, falling back to JS:', e);
-  statusEl.textContent = 'Weights loaded (JS fallback). Select an image to begin.';
-});
+async function matmul(wasm, hin, hinlen, hout, houtlen, w1, b1) {
+  if (wasm.wasmMatmul && document.getElementById('use-wasm').checked) {
+    //if (hinlen * houtlen > 100) {
+    //  await parallel_wasm_matmul(wasm, hin, hinlen, hout, houtlen, w1, b1);
+    //} else { 
+      wasm_matmul(wasm, hin, hinlen, hout, houtlen, w1, b1);
+    //}
+    return;
+  }
+  for (let i = 0; i < houtlen; i++) {
+    let v = b1[i];
+    const q = i * hinlen;
+    for (let j = 0; j < hinlen; j++)
+      v += w1[q + j] * hin[j];
+    hout[i] = v;
+  }
+}
+
+async function mlp(wasm, feat, out, W) {
+  const _h0 = new Float32Array(256); // e.g. hin
+  const _h1 = new Float32Array(128); // e.g. hout
+  const _h2 = new Float32Array(64);
+  const _h3 = new Float32Array(3);
+  const _h4 = new Float32Array(3);
+  
+  for (let x = 0; x < W; x++) {
+    // Layer 0: 420->256 LeakyReLU
+    await matmul(wasm, feat.subarray(x*FEATURE_SIZE, x*FEATURE_SIZE + FEATURE_SIZE), FEATURE_SIZE, _h0, 256, w0, b0);
+    for (let i = 0; i < 256; i++) {
+      _h0[i] = Math.max(_h0[i], Math.fround(0.01 * _h0[i]));
+    }
+    // Layer 1: 256->128 LeakyReLU
+    await matmul(wasm, _h0, 256, _h1, 128, w1, b1);
+    for (let i = 0; i < 128; i++) {
+      _h1[i] = Math.max(_h1[i], Math.fround(0.01 * _h1[i]));
+    }
+    // Layer 2: 128->64 LeakyReLU
+    await matmul(wasm, _h1, 128, _h2, 64, w2, b2);
+    for (let i = 0; i < 64; i++) {
+      _h2[i] = Math.max(_h2[i], Math.fround(0.01 * _h2[i]));
+    }
+    // Layer 3: 64->3 Sigmoid
+    await matmul(wasm, _h2, 64, _h3, 3, w3, b3);
+    for (let i = 0; i < 3; i++) {
+      _h3[i] = 1.0 / (1.0 + Math.exp(-_h3[i]));
+    }
+    // Layer 4: 3->3 linear
+    await matmul(wasm, _h3, 3, out.subarray(x*3, x*3 + 3), 3, w4, b4);
+    for (let i = 0; i < 3; i++) {
+      out[x*3 + i] = Math.max(0, Math.min(1, out[x*3 + i]));
+    }
+  }
+}
+
+let __mlpPool = null;
+async function parallel_mlp(wasm, feat, out, W) {
+  const numThreads = navigator.hardwareConcurrency || 4;
+
+  // 1. Internal Initialization (Runs only once)
+  if (!__mlpPool) {
+    const workerCode = `
+      const FEATURE_SIZE = ${FEATURE_SIZE};
+      let weights;
+      let wasmInstance;
+
+      function matmul_js(hin, hinlen, hout, houtlen, w1, b1) {
+        for (let i = 0; i < houtlen; i++) {
+          let v = b1[i];
+          const q = i * hinlen;
+          for (let j = 0; j < hinlen; j++)
+            v += w1[q + j] * hin[j];
+          hout[i] = v;
+        }
+      }
+
+      function matmul_wasm(hin, hinlen, hout, houtlen, w1, b1) {
+        const f32 = 4;
+        const p_hin  = 0;
+        const p_hout = p_hin  + hinlen  * f32;
+        const p_w1   = p_hout + houtlen * f32;
+        const p_b1   = p_w1   + hinlen * houtlen * f32;
+        const req    = p_b1   + houtlen * f32;
+
+        const mem = wasmInstance.exports.memory;
+        if (mem.buffer.byteLength < req)
+          mem.grow(Math.ceil((req - mem.buffer.byteLength) / 65536));
+
+        const memF32 = new Float32Array(mem.buffer);
+        memF32.set(hin, p_hin / f32);
+        memF32.set(w1,  p_w1 / f32);
+        memF32.set(b1,  p_b1 / f32);
+
+        wasmInstance.exports.matmul(p_hin, hinlen, p_hout, houtlen, p_w1, p_b1);
+        hout.set(new Float32Array(mem.buffer, p_hout, houtlen));
+      }
+
+      function matmul(hin, hinlen, hout, houtlen, w1, b1) {
+        if (wasmInstance) {
+          matmul_wasm(hin, hinlen, hout, houtlen, w1, b1);
+        } else {
+          matmul_js(hin, hinlen, hout, houtlen, w1, b1);
+        }
+      }
+
+      function run_mlp_chunk(feat, startX, chunkW) {
+        const out = new Float32Array(chunkW * 3);
+        const _h0 = new Float32Array(256);
+        const _h1 = new Float32Array(128);
+        const _h2 = new Float32Array(64);
+        const _h3 = new Float32Array(3);
+        const _h4 = new Float32Array(3);
+
+        for (let xi = 0; xi < chunkW; xi++) {
+          // Layer 0: 420->256 LeakyReLU
+          matmul(feat.subarray(xi*FEATURE_SIZE, xi*FEATURE_SIZE + FEATURE_SIZE), FEATURE_SIZE, _h0, 256, weights.w0, weights.b0);
+          for (let i = 0; i < 256; i++)
+            _h0[i] = Math.max(_h0[i], Math.fround(0.01 * _h0[i]));
+
+          // Layer 1: 256->128 LeakyReLU
+          matmul(_h0, 256, _h1, 128, weights.w1, weights.b1);
+          for (let i = 0; i < 128; i++)
+            _h1[i] = Math.max(_h1[i], Math.fround(0.01 * _h1[i]));
+
+          // Layer 2: 128->64 LeakyReLU
+          matmul(_h1, 128, _h2, 64, weights.w2, weights.b2);
+          for (let i = 0; i < 64; i++)
+            _h2[i] = Math.max(_h2[i], Math.fround(0.01 * _h2[i]));
+
+          // Layer 3: 64->3 Sigmoid
+          matmul(_h2, 64, _h3, 3, weights.w3, weights.b3);
+          for (let i = 0; i < 3; i++)
+            _h3[i] = 1.0 / (1.0 + Math.exp(-_h3[i]));
+
+          // Layer 4: 3->3 linear + clamp
+          matmul(_h3, 3, _h4, 3, weights.w4, weights.b4);
+          for (let i = 0; i < 3; i++)
+            out[xi*3 + i] = Math.max(0, Math.min(1, _h4[i]));
+        }
+        return out;
+      }
+
+      onmessage = async (e) => {
+        const { type } = e.data;
+
+        if (type === 'INIT') {
+          weights = e.data.weights;
+          if (e.data.wasmBase64) {
+            const bytes = Uint8Array.from(atob(e.data.wasmBase64), c => c.charCodeAt(0));
+            const mod = await WebAssembly.compile(bytes);
+            wasmInstance = await WebAssembly.instantiate(mod);
+          }
+          postMessage({ type: 'READY' });
+          return;
+        }
+
+        if (type === 'RUN') {
+          const { feat, startX, chunkW } = e.data.task;
+          const res = run_mlp_chunk(feat, startX, chunkW);
+          postMessage({ res, startX }, [res.buffer]);
+        }
+      };
+    `;
+
+    const blob = new Blob([workerCode], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+
+    // Send weights once at init time — they're the same for every chunk
+    const initWeights = { w0, b0, w1, b1, w2, b2, w3, b3, w4, b4 };
+    const initWasm = (wasm.wasmMatmul && document.getElementById('use-wasm').checked)
+      ? wasmBase64
+      : null;
+
+    __mlpPool = await Promise.all(Array.from({ length: numThreads }, () => {
+      const w = new Worker(url);
+      return new Promise(res => {
+        w.onmessage = (e) => { if (e.data.type === 'READY') res(w); };
+        w.postMessage({ type: 'INIT', weights: initWeights, wasmBase64: initWasm });
+      });
+    }));
+    URL.revokeObjectURL(url);
+  }
+
+  // 2. Splitting Logic — divide W (pixels) across threads, not weight rows
+  const chunkSize = Math.ceil(W / numThreads);
+  const tasks = __mlpPool.map((worker, i) => {
+    const startX = i * chunkSize;
+    if (startX >= W) return Promise.resolve();
+    const chunkW = Math.min(chunkSize, W - startX);
+
+    // Each worker gets only the feature rows it needs
+    const featChunk = feat.slice(startX * FEATURE_SIZE, (startX + chunkW) * FEATURE_SIZE);
+
+    return new Promise(resolve => {
+      worker.onmessage = (e) => {
+        out.set(e.data.res, e.data.startX * 3);
+        resolve();
+      };
+      worker.postMessage(
+        { type: 'RUN', task: { feat: featChunk, startX, chunkW } },
+        [featChunk.buffer]
+      );
+    });
+  });
+
+  await Promise.all(tasks);
+}
 
 // ── MLP forward (single pixel, output written into out[0..2]) ─────────────────
-const _h0 = new Float32Array(256);
-const _h1 = new Float32Array(128);
-const _h2 = new Float32Array(64);
-const _h3 = new Float32Array(3);
-const _h4 = new Float32Array(3);
 
-function mlp(feat, out) {
-  // Layer 0: 420->256 LeakyReLU
-  const L0 = LAYERS[0]; const w0=L0.w, b0=L0.b;
-  for (let i = 0; i < 256; i++) {
-    let v = b0[i]; const base = i * 420;
-    for (let j = 0; j < 420; j++) v += w0[base + j] * feat[j];
-    _h0[i] = v > 0 ? v : 0.01 * v;
-  }
-  // Layer 1: 256->128 LeakyReLU
-  const L1 = LAYERS[1]; const w1=L1.w, b1=L1.b;
-  for (let i = 0; i < 128; i++) {
-    let v = b1[i]; const base = i * 256;
-    for (let j = 0; j < 256; j++) v += w1[base + j] * _h0[j];
-    _h1[i] = v > 0 ? v : 0.01 * v;
-  }
-  // Layer 2: 128->64 LeakyReLU
-  const L2 = LAYERS[2]; const w2=L2.w, b2=L2.b;
-  for (let i = 0; i < 64; i++) {
-    let v = b2[i]; const base = i * 128;
-    for (let j = 0; j < 128; j++) v += w2[base + j] * _h1[j];
-    _h2[i] = v > 0 ? v : 0.01 * v;
-  }
-  // Layer 3: 64->3 Sigmoid
-  const L3 = LAYERS[3]; const w3=L3.w, b3=L3.b;
-  for (let i = 0; i < 3; i++) {
-    let v = b3[i]; const base = i * 64;
-    for (let j = 0; j < 64; j++) v += w3[base + j] * _h2[j];
-    _h3[i] = 1.0 / (1.0 + Math.exp(-v));
-  }
-  // Layer 4: 3->3 linear
-  const L4 = LAYERS[4]; const w4=L4.w, b4=L4.b;
-  for (let i = 0; i < 3; i++) {
-    let v = b4[i]; const base = i * 3;
-    for (let j = 0; j < 3; j++) v += w4[base + j] * _h3[j];
-    out[i] = Math.max(0, Math.min(1, v));
-  }
-}
+const L0 = LAYERS[0];
+const w0 = new Float32Array(L0.w);
+const b0 = new Float32Array(L0.b);
+
+const L1 = LAYERS[1];
+
+const w1 = new Float32Array(L1.w); // guaranteed length: h0len * h1len
+const b1 = new Float32Array(L1.b); // guaranteed length: h1len
+
+const L2 = LAYERS[2];
+const w2 = new Float32Array(L2.w);
+const b2 = new Float32Array(L2.b);
+
+const L3 = LAYERS[3];
+const w3 = new Float32Array(L3.w);
+const b3 = new Float32Array(L3.b);
+
+const L4 = LAYERS[4];
+const w4 = new Float32Array(L4.w);
+const b4 = new Float32Array(L4.b);
 
 // ── Image pyramid ─────────────────────────────────────────────────────────────
 const SCALE_FACTORS = [1, 0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625, 0.0078125, 0.00390625];
@@ -301,16 +566,14 @@ function buildScales(imgEl) {
   
   // We skip the first factor if it's 1.0, as Python does result = [img]
   for (let s = 1; s < SCALE_FACTORS.length; s++) {
-    const factor = SCALE_FACTORS[s] / SCALE_FACTORS[s-1]; // Relative factor for recursive scaling
+    const nw = Math.max(1, Math.round(startCanvas.width * SCALE_FACTORS[s]));
+    const nh = Math.max(1, Math.round(startCanvas.height * SCALE_FACTORS[s]));
+    
     const prev = scales[scales.length - 1];
-    
-    const nw = Math.max(1, Math.round(prev.w * factor));
-    const nh = Math.max(1, Math.round(prev.h * factor));
-    
     const newData = manualBilinear(prev.data, prev.w, prev.h, nw, nh);
     
     // Create debug canvas
-	/*
+  /*
     const c = document.createElement('canvas');
     c.width = nw;
     c.height = nh;
@@ -318,7 +581,7 @@ function buildScales(imgEl) {
     const imgDataObj = new ImageData(newData, nw, nh);
     ctx.putImageData(imgDataObj, 0, 0);
     document.body.appendChild(c);
-	*/
+  */
     
     const scaleObj = { w: nw, h: nh, data: newData };
     scales.push(scaleObj);
@@ -387,10 +650,9 @@ function bilerp(scaleData, scaleW, scaleH, fy, fx) {
   return [r, g, b];
 }
 
-// ── Build 420-element feature vector for one pixel ────────────────────────────
-const _feat = new Float32Array(420);
+// ── Build FEATURE_SIZE-element feature vector for one pixel ────────────────────────────
 
-function buildFeat(scales, px, py, metalHint) {
+function buildFeat(scales, px, py, metalHint, _feat) {
   const s0 = scales[0];
   const W = s0.w, H = s0.h;
   let fi = 0;
@@ -472,35 +734,35 @@ fileInput.addEventListener('change', () => { if (fileInput.files[0]) loadFile(fi
 
 function delete_color_correction_metadata(data)
 {
-	let gamma_chunk = [0x00, 0x00, 0x00, 0x04, 0x67, 0x41, 0x4D, 0x41];
-	let srgb_chunk = [0x00, 0x00, 0x00, 0x01, 0x73, 0x52, 0x47, 0x42];
-	//let srgb_chunk  = new Array([0x00, 0x00, 0x00, 0x04, 0x67, 0x41, 0x4D, 0x41]);
-	function find(array)
-	{
-		return data.findIndex((_, i, data) =>
-		{
-			function equal(buf1, buf2)
-			{
-				if (buf1.length != buf2.length)
-					return false;
-				for (let i = 0 ; i != buf1.length ; i++)
-				{
-					if (buf1[i] != buf2[i])
-						return false;
-				}
-				return true;
-			}
-			let asdf = equal(data.slice(i, i+8), array); // gAMA chunk
-			return asdf;
-		});
-	};
-	let index = find(gamma_chunk);
-	if(index >= 0)
-		data.splice(index, 16);
-	index = find(srgb_chunk);
-	if(index >= 0)
-		data.splice(index, 13);
-	return data;
+  let gamma_chunk = [0x00, 0x00, 0x00, 0x04, 0x67, 0x41, 0x4D, 0x41];
+  let srgb_chunk = [0x00, 0x00, 0x00, 0x01, 0x73, 0x52, 0x47, 0x42];
+  //let srgb_chunk  = new Array([0x00, 0x00, 0x00, 0x04, 0x67, 0x41, 0x4D, 0x41]);
+  function find(array)
+  {
+    return data.findIndex((_, i, data) =>
+    {
+      function equal(buf1, buf2)
+      {
+        if (buf1.length != buf2.length)
+          return false;
+        for (let i = 0 ; i != buf1.length ; i++)
+        {
+          if (buf1[i] != buf2[i])
+            return false;
+        }
+        return true;
+      }
+      let asdf = equal(data.slice(i, i+8), array); // gAMA chunk
+      return asdf;
+    });
+  };
+  let index = find(gamma_chunk);
+  if(index >= 0)
+    data.splice(index, 16);
+  index = find(srgb_chunk);
+  if(index >= 0)
+    data.splice(index, 13);
+  return data;
 }
 
 async function loadFile(file) {
@@ -604,37 +866,54 @@ async function runInference() {
   _outA = new Uint8ClampedArray(W * H);
   _outM = new Uint8ClampedArray(W * H);
   const outR = _outR, outA = _outA, outM = _outM;
-  const pixOut = new Float32Array(3);
 
+  if (!wasm) wasm = initWasm();
+  
   resultsPanel.style.display = 'block';
   statusEl.textContent = 'Running inference... 0%';
-  const CHUNK = 4; // rows per async chunk (keeps UI responsive)
+  
+  const CHUNK_L = 4;
+  const CHUNK_M = 8;
+  const CHUNK_H = 16; // rows per async chunk (keeps UI responsive)
+  
+  let CHUNK = CHUNK_L;
+  
+  const pixOut = new Float32Array(CHUNK_H * W * 3);
+  const features = new Float32Array(CHUNK_H * W * FEATURE_SIZE);
   for (let y = 0; y < H; y += CHUNK) {
+  
+    CHUNK = CHUNK_L;
+    if (document.getElementById('use-wasm').checked) {
+      CHUNK = CHUNK_M;
+    }
+    if (document.getElementById('use-parallel').checked) {
+      CHUNK = CHUNK_H;
+    }
+    
     const yEnd = Math.min(y + CHUNK, H);
     for (let cy = y; cy < yEnd; cy++) {
       for (let cx = 0; cx < W; cx++) {
-        buildFeat(scales, cx, cy, metalHint);
-        if (wasmMlp && document.getElementById('use-wasm').checked) {
-          wasmFeat.set(_feat);
-          wasmMlp.layer0(); wasmMlp.layer1(); wasmMlp.layer2();
-          wasmMlp.layer3(); wasmMlp.layer4();
-          pixOut[0] = wasmMlp.get_h4_0();
-          pixOut[1] = wasmMlp.get_h4_1();
-          pixOut[2] = wasmMlp.get_h4_2();
-          if (cx === 0 && cy === 0) {
-            const jsOut = new Float32Array(3);
-            mlp(_feat, jsOut);
-            console.log('px(0,0) WASM:', pixOut[0].toFixed(4), pixOut[1].toFixed(4), pixOut[2].toFixed(4));
-            console.log('px(0,0)   JS:', jsOut[0].toFixed(4), jsOut[1].toFixed(4), jsOut[2].toFixed(4));
-          }
-
-        } else {
-          mlp(_feat, pixOut);
-        }
-        const idx = cy * W + cx;
-        outR[idx] = pixOut[0] * 255 + 0.5;
-        outA[idx] = pixOut[1] * 255 + 0.5;
-        outM[idx] = pixOut[2] * 255 + 0.5;
+        let idx = cx + (cy-y)*W;
+        buildFeat(scales, cx, cy, metalHint, features.subarray(idx*FEATURE_SIZE, idx*FEATURE_SIZE + FEATURE_SIZE));
+      }
+    }
+    for (let cy = y; cy < yEnd; cy++) {
+      let idx = (cy-y)*W;
+      let feat = features.subarray(idx*FEATURE_SIZE, idx*FEATURE_SIZE + FEATURE_SIZE*W);
+      let outputs = pixOut.subarray(idx*3, idx*3 + 3*W);
+      if (document.getElementById('use-parallel').checked) {
+        await parallel_mlp(wasm, feat, outputs, W);
+      } else { 
+        await mlp(wasm, feat, outputs, W);
+      }
+    }
+    for (let cy = y; cy < yEnd; cy++) {
+      for (let cx = 0; cx < W; cx++) {
+        let idx = cx + (cy-y)*W;
+        let idx2 = cx + cy*W;
+        outR[idx2] = pixOut[idx*3 + 0] * 255 + 0.5;
+        outA[idx2] = pixOut[idx*3 + 1] * 255 + 0.5;
+        outM[idx2] = pixOut[idx*3 + 2] * 255 + 0.5;
       }
     }
     // Yield to browser every chunk
@@ -740,6 +1019,7 @@ statusEl.textContent = 'Weights loaded. Select an image to begin.';
 </script>
 </body>
 </html>
+
 """
 
 if __name__ == "__main__":

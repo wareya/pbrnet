@@ -73,9 +73,10 @@ def load_rgb_f32(path):
     return np.array(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
 
 def downscale(img, factor):
+    from math import floor
     h, w = img.shape[:2]
-    nw = max(1, int(round(w * factor)))
-    nh = max(1, int(round(h * factor)))
+    nw = max(1, int(floor(w * factor)))
+    nh = max(1, int(floor(h * factor)))
     pil = Image.fromarray((img * 255).clip(0, 255).astype(np.uint8))
     return np.array(pil.resize((nw, nh), Image.BILINEAR), dtype=np.float32) / 255.0
 
@@ -84,9 +85,8 @@ def pad_edge(img, pad):
 
 def make_scales(img):
     result = [img]
-    for f in SCALE_FACTORS[1:]:
-        result.append(downscale(result[-1], f))
-        #result.append(downscale(img, f))
+    for f1, f2 in zip(SCALE_FACTORS[1:], SCALE_FACTORS[:-1]):
+        result.append(downscale(result[-1], f1/f2))
     return result   # list of 9 images
 
 # ── feature building + inference, row-strip by row-strip ─────────────────────
