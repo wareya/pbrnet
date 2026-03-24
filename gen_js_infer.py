@@ -120,6 +120,7 @@ label { font-size: 0.8em; color: #888; }
 .result canvas { display: block; border-radius: 3px; border: 1px solid #333;
                  max-width: 256px; max-height: 256px; }
 .result a { display: block; font-size: 0.75em; color: #7af; margin-top: 3px; }
+a:visited { color: #7af }
 .results.stale .result canvas { opacity: 0.35; transition: opacity 0.2s; }
 .timing { font-size: 0.75em; color: #666; margin-top: 8px; }
 </style>
@@ -1017,6 +1018,11 @@ resultsEl.addEventListener('click', e => {
 
 statusEl.textContent = 'Weights loaded. Select an image to begin.';
 </script>
+<br>
+<p>Home page: <a href='https://github.com/wareya/pbrnet'>https://github.com/wareya/pbrnet</a></p>
+<p>This is the slow online demo! The python+pytorch version is faster.</p>
+<p>Preview tool: <a href='https://wareya.github.io/pbrnet/pbr_previewer.html'>https://wareya.github.io/pbrnet/pbr_previewer.html</a></p>
+<p>For normals, use: <a href='https://github.com/HugoTini/DeepBump'>https://github.com/HugoTini/DeepBump</a></p>
 </body>
 </html>
 
