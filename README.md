@@ -54,4 +54,6 @@ During training, the patch/chunk data can be augmented as follows: randomly rota
 
 Building a sampled dataset over the 250ish image pairs takes a few minutes. Training the network for 500 epochs takes again a few more minutes, on CPU. Inference takes about a second for particularly large images, again on CPU.
 
-The final network's prediction quality is acceptable, especially for roughness and AO.
+My subjective assessment of the output quality: synthesized roughness is decent, ambient occlusion is OK, and metallicity/metalness is a bit sus but more or less usable without uusing the hint, but OK when using the hint.
+
+Getting quality like this out of such a small network is a reminder that normal, pre-generative AI isn't totally dead.
