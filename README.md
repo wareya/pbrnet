@@ -14,9 +14,11 @@ Roughness and AO outputs are decent. Metalness output is somewhat poor, but ther
 
 It's python but it uses uv so it's not as awful to use as most python programs.
 
-If you REALLY want, there's a fully in-browser no-server version you can test with, but note that it's meaningfully slower. https://wareya.github.io/pbrnet/
+If you REALLY want, there's a fully in-browser no-server version you can test with, but note that it's meaningfully slower: https://wareya.github.io/pbrnet/
 
 You can preview the generated textures with this tool here: https://wareya.github.io/pbrnet/pbr_previewer.html
+
+For normals, use: https://github.com/HugoTini/DeepBump
 
 ```
 # convert every file textures/*.dds
