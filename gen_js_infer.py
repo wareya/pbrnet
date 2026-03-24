@@ -89,7 +89,7 @@ def build_html(layers_json):
     # The JS is written as a regular Python string. No escape issues because
     # we use a different delimiter and avoid backslash sequences in string literals.
     # All JS string splitting uses indexOf/substring rather than regex or \n.
-    return """<!DOCTYPE html>
+    return """
 <!DOCTYPE html>
 <html lang="en">
 <head>
