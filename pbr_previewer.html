@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>PBR Material Tester</title>
+    <style>
+        body { margin: 0; background: #000; color: #fff; font-family: monospace; display: flex; overflow: hidden; }
+        #ui { width: 280px; padding: 20px; border-right: 1px solid #333; height: 100vh; box-sizing: border-box; overflow-y: auto; z-index: 10; }
+        input, select { display: block; margin-bottom: 8px; width: 100%; background: #222; color: #fff; border: 1px solid #444; padding: 5px; box-sizing: border-box; }
+        label { display: block; font-size: 11px; color: #888; text-transform: uppercase; margin-top: 10px; }
+        .texture-unit { margin-bottom: 15px; border-bottom: 1px solid #222; padding-bottom: 10px; }
+        .unload-btn { width: 100%; background: #422; color: #f88; border: 1px solid #633; cursor: pointer; font-size: 10px; padding: 4px; text-transform: uppercase; }
+        .unload-btn:hover { background: #622; }
+        canvas { flex-grow: 1; cursor: crosshair; }
+        .info { font-size: 10px; color: #666; margin-top: 10px; line-height: 1.4; }
+        hr { border: 0; border-top: 1px solid #333; margin: 20px 0; }
+    </style>
+</head>
+<body>
+
+<div id="ui">
+    <label>Geometry</label>
+    <select id="geomType">
+        <option value="sphere">Sphere</option>
+        <option value="cube">Cube</option>
+    </select>
+
+    <label>Sun Intensity</label>
+    <input type="range" id="sunVal" min="0" max="10" step="0.1" value="2">
+
+    <label>Ambient Intensity</label>
+    <input type="range" id="ambVal" min="0" max="2" step="0.01" value="0.5">
+    
+    <label>Environment Map</label>
+    <select id="envType">
+        <option value="none" selected>None</option>
+        <option value="built-in">Built-in (Room)</option>
+    </select>
+    
+    <hr>
+    
+    <div class="texture-unit">
+        <label>Albedo (sRGB)</label>
+        <input type="file" id="map">
+        <button class="unload-btn" data-prop="map">Unload</button>
+    </div>
+
+    <div class="texture-unit">
+        <label>Normal (Linear)</label>
+        <input type="file" id="normalMap">
+        <button class="unload-btn" data-prop="normalMap">Unload</button>
+    </div>
+
+    <div class="texture-unit">
+        <label>Roughness (Linear)</label>
+        <input type="file" id="roughnessMap">
+        <button class="unload-btn" data-prop="roughnessMap">Unload</button>
+    </div>
+
+    <div class="texture-unit">
+        <label>Metalness (Linear)</label>
+        <input type="file" id="metalnessMap">
+        <button class="unload-btn" data-prop="metalnessMap">Unload</button>
+    </div>
+
+    <div class="texture-unit">
+        <label>AO (Linear)</label>
+        <input type="file" id="aoMap">
+        <button class="unload-btn" data-prop="aoMap">Unload</button>
+    </div>
+
+    <div class="info">
+        <b>Left Click Drag:</b> Rotate View<br>
+        <b>Space + Left Drag:</b> Rotate Sun<br>
+        <b>Right Click Drag:</b> Pan<br>
+        <b>Scroll:</b> Zoom<br>
+    </div>
+</div>
+
+<script type="importmap">
+    { 
+        "imports": { 
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        } 
+    }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, (window.innerWidth - 280) / window.innerHeight, 0.1, 100);
+    camera.position.set(2, 2, 2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth - 280, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const roomEnv = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+    const sun = new THREE.DirectionalLight(0xffffff, 2);
+    sun.position.set(5, 5, 5);
+    scene.add(sun);
+
+    const ambient = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambient);
+
+    const sphereGeom = new THREE.SphereGeometry(0.8, 64, 64);
+    const cubeGeom = new THREE.BoxGeometry(1, 1, 1);
+    
+    const material = new THREE.MeshStandardMaterial({ 
+        color: 0xffffff, 
+        metalness: 0.0, 
+        roughness: 0.5 
+    });
+    const mesh = new THREE.Mesh(sphereGeom, material);
+    scene.add(mesh);
+
+    const loader = new THREE.TextureLoader();
+    
+    const handleFile = (id, prop) => {
+        document.getElementById(id).onchange = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const url = URL.createObjectURL(file);
+            loader.load(url, (t) => {
+                t.flipY = false;
+                t.anisotropy = maxAnisotropy;
+                t.colorSpace = (prop === 'map') ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+                
+                if (material[prop]) material[prop].dispose();
+                material[prop] = t;
+
+                // Ensure multiplier is 1.0 when a map is present
+                if (prop === 'metalnessMap') material.metalness = 1.0;
+                if (prop === 'roughnessMap') material.roughness = 1.0;
+
+                if (prop === 'aoMap') {
+                    sphereGeom.attributes.uv2 = sphereGeom.attributes.uv;
+                    cubeGeom.attributes.uv2 = cubeGeom.attributes.uv;
+                }
+                material.needsUpdate = true;
+            });
+        };
+    };
+
+    ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap'].forEach(p => handleFile(p, p));
+
+    document.querySelectorAll('.unload-btn').forEach(btn => {
+        btn.onclick = () => {
+            const prop = btn.getAttribute('data-prop');
+            if (material[prop]) {
+                material[prop].dispose();
+                material[prop] = null;
+                document.getElementById(prop).value = "";
+
+                // Revert to defaults if map is removed
+                if (prop === 'metalnessMap') material.metalness = 0.0;
+                if (prop === 'roughnessMap') material.roughness = 0.5;
+                
+                material.needsUpdate = true;
+            }
+        };
+    });
+
+    document.getElementById('geomType').onchange = (e) => {
+        mesh.geometry = (e.target.value === 'sphere') ? sphereGeom : cubeGeom;
+    };
+    document.getElementById('sunVal').oninput = (e) => sun.intensity = parseFloat(e.target.value);
+    document.getElementById('ambVal').oninput = (e) => ambient.intensity = parseFloat(e.target.value);
+    document.getElementById('envType').onchange = (e) => {
+        scene.environment = (e.target.value === 'built-in') ? roomEnv : null;
+    };
+
+    let isSpaceDown = false;
+    let sunPhi = Math.PI / 4, sunTheta = Math.PI / 4;
+    window.addEventListener('keydown', (e) => { if (e.code === 'Space') { isSpaceDown = true; controls.enabled = false; } });
+    window.addEventListener('keyup', (e) => { if (e.code === 'Space') { isSpaceDown = false; controls.enabled = true; } });
+
+    renderer.domElement.addEventListener('mousemove', (e) => {
+        if (isSpaceDown && e.buttons === 1) {
+            sunTheta -= e.movementX * 0.01;
+            sunPhi -= e.movementY * 0.01;
+            sunPhi = Math.max(0.1, Math.min(Math.PI - 0.1, sunPhi));
+            sun.position.setFromSphericalCoords(7, sunPhi, sunTheta);
+        }
+    });
+
+    function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    window.onresize = () => {
+        const w = window.innerWidth - 280;
+        camera.aspect = w / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(w, window.innerHeight);
+    };
+</script>
+</body>
+</html>
