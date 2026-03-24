@@ -2,9 +2,11 @@
 
 (AI slop -- made by claude webchat -- probably public domain under US law -- model trained only on public domain material)
 
-Oldschool non-latent non-convolutional neural network for making PBR roughness/metalness/ambient occlusion data from color/diffuse/albedo textures. Trained only on public domain material
+Oldschool non-latent non-convolutional neural network for making PBR roughness/metalness/ambient occlusion data from color/diffuse/albedo textures. Trained only on public domain material.
 
-Can output ORM, MRO, or separate textures per feature. Feature-generic: can be trained to recognize other analog features as instead of just ORM
+**This is *not* a generative AI tool.** It's a granular categorization tool with a model so small it can't *possibly* be memorizing and storing the training data.
+
+Can output ORM, MRO, or separate textures per feature. Feature-generic: can be trained to recognize other analog features as instead of just ORM.
 
 Roughness and AO outputs are decent. Metalness output is somewhat poor, but there's an parameter for hinting at it whether the image has significant metal or not or whether you don't know.
 
