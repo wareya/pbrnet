@@ -34,6 +34,8 @@ $ time uv run python train.py --data dataset.npz --epochs=500
 
 <img width="1220" height="598" alt="image" src="https://github.com/user-attachments/assets/9c9f1b43-9116-42f1-90d2-3a709da933a1" />
 
+<img width="1646" height="714" alt="explorer_2026-03-24_17-57-54" src="https://github.com/user-attachments/assets/05ee37fe-27ce-47a0-9822-23691dc97553" />
+
 <img width="1201" height="591" alt="explorer_2026-03-23_16-33-41" src="https://github.com/user-attachments/assets/fe873be6-c26b-4d63-98d7-75f9009601b8" />
 
 <img width="1211" height="596" alt="explorer_2026-03-23_16-13-07" src="https://github.com/user-attachments/assets/ede45f78-3a18-40a7-83f0-226ccde32781" />
