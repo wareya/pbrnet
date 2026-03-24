@@ -16,6 +16,8 @@ It's python but it uses uv so it's not as awful to use as most python programs.
 
 If you REALLY want, there's a fully in-browser no-server version you can test with, but note that it's meaningfully slower. https://wareya.github.io/pbrnet/
 
+You can preview the generated textures with this tool here: https://wareya.github.io/pbrnet/pbr_previewer.html
+
 ```
 # convert every file textures/*.dds
 $ time uv run python infer.py --dir textures --pattern ".dds" --mro
