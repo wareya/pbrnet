@@ -200,7 +200,7 @@ function initWasm() {
   return ret;
 }
 
-const FEATURE_SIZE = '""" + f"{INPUT_DIM}" + """';
+const FEATURE_SIZE = """ + f"{INPUT_DIM}" + """;
 
 let wasm;
 
@@ -315,7 +315,7 @@ async function parallel_wasm_matmul(wasm, hin, hinlen, hout, houtlen, w1, b1) {
 }
 
 async function matmul(wasm, hin, hinlen, hout, houtlen, w1, b1) {
-  if (wasm.wasmMatmul && document.getElementById('use-wasm').checked) {
+  if (wasm.wasmMatmul && document.getElementById('use-wasm').checked && houtlen >= 4 && hinlen >= 4) {
     //if (hinlen * houtlen > 100) {
     //  await parallel_wasm_matmul(wasm, hin, hinlen, hout, houtlen, w1, b1);
     //} else { 
@@ -411,7 +411,7 @@ async function parallel_mlp(wasm, feat, out, W) {
       }
 
       function matmul(hin, hinlen, hout, houtlen, w1, b1) {
-        if (wasmInstance) {
+        if (wasmInstance && houtlen >= 4 && hinlen >= 4) {
           matmul_wasm(hin, hinlen, hout, houtlen, w1, b1);
         } else {
           matmul_js(hin, hinlen, hout, houtlen, w1, b1);
