@@ -10,7 +10,7 @@ Oldschool non-latent non-convolutional neural network for making PBR roughness/m
 
 Can output ORM, MRO, or separate textures per feature. Feature-generic: can be trained to recognize other granular features and not just ORM, and training is fast, even on CPU.
 
-Roughness and AO outputs are decent. Metalness output is somewhat poor, but there's an parameter for hinting at it whether the image has significant metal or not or whether you don't know.
+Roughness and AO outputs are decent. Metalness output is somewhat poor, but there's a parameter for hinting at it whether the image has significant metal or not or whether you don't know.
 
 It's python but it uses uv so it's not as awful to use as most python programs.
 
