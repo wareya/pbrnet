@@ -41,8 +41,6 @@ def pick_device(override):
 
 # ── network ───────────────────────────────────────────────────────────────────
 
-INPUT_DIM = 420
-
 class PBRNet(nn.Module):
     def __init__(self):
         super().__init__()
@@ -62,6 +60,22 @@ class PBRNet(nn.Module):
 # ── image helpers ─────────────────────────────────────────────────────────────
 
 SCALE_FACTORS = (1.0, 0.5, 0.25, 1/8, 1/16, 1/32, 1/64, 1/128, 1/256)
+
+# Must match PATCH_SPEC in build_dataset.py exactly.
+# (patch_size n, edge_pad, start_offset) — one entry per scale level.
+PATCH_SPEC: tuple[tuple[int, int, int], ...] = (
+    (9, 4, 0),  # 1/1   : 9×9 centred, half = 4
+    (7, 3, 0),  # 1/2   : 7×7 centred, half = 3
+    (5, 2, 0),  # 1/4   : 5×5 centred, half = 2
+    (4, 2, 1),  # 1/8   : 4×4, rows [cy_ds-1 … cy_ds+2]
+    (4, 2, 1),  # 1/16
+    (3, 1, 0),  # 1/32  : 3×3 centred, half = 1
+    (3, 1, 0),  # 1/64
+    (3, 1, 0),  # 1/128
+    (3, 1, 0),  # 1/256
+)
+
+INPUT_DIM = 3 + sum(n * n * 3 for n, _, _ in PATCH_SPEC)
 
 def load_rgb_f32_from_bytes(data: bytes) -> np.ndarray:
     return np.array(Image.open(io.BytesIO(data)).convert("RGB"), dtype=np.float32) / 255.0
@@ -93,8 +107,10 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5, progress_
     # (scales already built by caller — measure pad only)
     t_downscale_pre = 0.0  # placeholder, timed in infer_one
 
+    n0, pad0, _ = PATCH_SPEC[0]
+
     t0_pad = time.perf_counter()
-    p4 = pad_edge(color_full, 4)
+    p4 = pad_edge(color_full, pad0)
     t_pad_pre = time.perf_counter() - t0_pad
 
     rows_per_strip = max(1, batch_size // W)
@@ -102,15 +118,15 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5, progress_
     t_feat = 0.0
     t_infer = 0.0
 
-    FEAT_COLS = 420
+    FEAT_COLS = INPUT_DIM
     scale_info = []
-    col = 246
+    col = 3 + n0 * n0 * 3   # slots 0-2 = hint; 3..col-1 = full-res patch
     t0_bw = time.perf_counter()
     for scale_idx, img in enumerate(scales[1:]):
         Hi, Wi = img.shape[:2]
-        if scale_idx == 0:   offsets = np.array([-2., -1., 0., 1., 2.], dtype=np.float32)
-        elif scale_idx == 1: offsets = np.array([-1., 0., 1.],          dtype=np.float32)
-        else:                offsets = np.array([-0.5, 0.5],             dtype=np.float32)
+        # Derive float sample offsets from PATCH_SPEC: positions offset-pad … offset-pad+n-1
+        n, pad, off = PATCH_SPEC[scale_idx + 1]
+        offsets = (np.arange(n, dtype=np.float32) + off - pad)
         n = len(offsets)
         width = n * n * 3
 
@@ -152,13 +168,13 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5, progress_
             Xv      = X[:N]
 
             t0 = time.perf_counter()
-            strip_p4 = p4[row_start:row_end + 8]
+            strip_p4 = p4[row_start:row_end + 2*pad0]
             sp = strip_p4.strides
-            Xv[:, 3:246] = np.lib.stride_tricks.as_strided(
+            Xv[:, 3:3+n0*n0*3] = np.lib.stride_tricks.as_strided(
                 strip_p4,
-                shape=(n_rows, W, 9, 9, 3),
+                shape=(n_rows, W, n0, n0, 3),
                 strides=(sp[0], sp[1], sp[0], sp[1], sp[2])
-            ).reshape(N, 243)
+            ).reshape(N, n0*n0*3)
             t_9x9 += time.perf_counter() - t0
 
             for si, (col_interp, Hi, n, width, y0, y1, wy, col_start) in enumerate(scale_info):
@@ -184,7 +200,10 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5, progress_
             if progress_cb is not None and row_end < H:
                 progress_cb(row_end, H, preds_out)
 
-    scale_names = ["1/2(5x5)", "1/4(3x3)"] + [f"1/{8<<i}(2x2)" for i in range(6)]
+    scale_names = [
+        f"1/{round(1/f)}({n}x{n})"
+        for (n, _, _), f in zip(PATCH_SPEC[1:], SCALE_FACTORS[1:])
+    ]
     print(f"  downscale:   {t_downscale:.3f}s")
     print(f"  pad:         {t_pad:.3f}s")
     print(f"  bil.weights: {t_bilweights:.3f}s")

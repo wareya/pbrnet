@@ -52,7 +52,8 @@ class PBRNet(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(420, 256), nn.LeakyReLU(0.01),
+            #nn.Linear(420, 256), nn.LeakyReLU(0.01),
+            nn.Linear(672, 256), nn.LeakyReLU(0.01),
             nn.Linear(256, 128), nn.LeakyReLU(0.01),
             nn.Linear(128, 64),  nn.LeakyReLU(0.01),
             nn.Linear(64, 3),    nn.Sigmoid(),

@@ -8,17 +8,17 @@ Scans a directory for PBR texture sets named:
     <n>_AmbientOcclusion.jpg   (optional — treated as 1.0 if absent)
     <n>_Metalness.jpg          (optional — treated as 0.0 if absent)
 
-Feature vector layout (420 floats):
+Feature vector layout (672 floats):
     [    0..  2]  metallicity hint (3 copies, one per RGB channel)
     [    3..245]  9×9  @ 1/1    (81 px × 3 ch = 243)
-    [  246..320]  5×5  @ 1/2    (25 px × 3 ch =  75)
-    [  321..347]  3×3  @ 1/4    ( 9 px × 3 ch =  27)
-    [  348..359]  2×2  @ 1/8    ( 4 px × 3 ch =  12)
-    [  360..371]  2×2  @ 1/16
-    [  372..383]  2×2  @ 1/32
-    [  384..395]  2×2  @ 1/64
-    [  396..407]  2×2  @ 1/128
-    [  408..419]  2×2  @ 1/256
+    [  246..392]  7×7  @ 1/2    (49 px × 3 ch = 147)
+    [  393..467]  5×5  @ 1/4    (25 px × 3 ch =  75)
+    [  468..515]  4×4  @ 1/8    (16 px × 3 ch =  48)
+    [  516..563]  4×4  @ 1/16
+    [  564..590]  3×3  @ 1/32   ( 9 px × 3 ch =  27)
+    [  591..617]  3×3  @ 1/64
+    [  618..644]  3×3  @ 1/128
+    [  645..671]  3×3  @ 1/256
 
 Usage
 ─────
@@ -60,20 +60,20 @@ SCALE_FACTORS: tuple[float, ...] = (1.0, 0.5, 0.25, 1/8, 1/16, 1/32, 1/64, 1/128
 #   pad = half = (n-1)//2,  offset = 0
 #   → padded[cy_ds : cy_ds+n]  gives rows  cy_ds-half … cy_ds+half  ✓
 #
-# For the 2×2 (originally sampled at ±0.5 ds-px around the float centre):
-#   pad = 1,  offset = 1
-#   → padded[cy_ds+1 : cy_ds+3]  gives rows  cy_ds, cy_ds+1  ✓
-#   (floor(fy_c) and floor(fy_c)+1 — the two rows bracketing the float centre)
+# For the 4×4 (bracketing the ds-coordinate with one row of context on each side):
+#   pad = 2,  offset = 1
+#   → padded[cy_ds+1 : cy_ds+5]  gives rows  cy_ds-1 … cy_ds+2  ✓
+#   (one row above and two rows below the integer ds-coordinate)
 PATCH_SPEC: tuple[tuple[int, int, int], ...] = (
     (9, 4, 0),  # 1/1   : 9×9 centred, half = 4
-    (5, 2, 0),  # 1/2   : 5×5 centred, half = 2
-    (3, 1, 0),  # 1/4   : 3×3 centred, half = 1
-    (2, 1, 1),  # 1/8   : 2×2, rows [cy_ds, cy_ds+1]
-    (2, 1, 1),  # 1/16
-    (2, 1, 1),  # 1/32
-    (2, 1, 1),  # 1/64
-    (2, 1, 1),  # 1/128
-    (2, 1, 1),  # 1/256
+    (7, 3, 0),  # 1/2   : 7×7 centred, half = 3
+    (5, 2, 0),  # 1/4   : 5×5 centred, half = 2
+    (4, 2, 1),  # 1/8   : 4×4, rows [cy_ds, cy_ds+1]
+    (4, 2, 1),  # 1/16
+    (3, 1, 0),  # 1/32  : 3×3 centred, half = 1
+    (3, 1, 0),  # 1/64
+    (3, 1, 0),  # 1/128
+    (3, 1, 0),  # 1/256
 )
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -167,7 +167,7 @@ def build_feature_matrix(
     use_blur:  np.ndarray | None = None,      # (N,) bool
 ) -> np.ndarray:
     """
-    Vectorised batch patch extraction.  Returns (N, 417) float32.
+    Vectorised batch patch extraction.  Returns (N, 669) float32.
 
     For each of the 9 scale levels one fancy-indexed numpy read pulls all N
     patches simultaneously — no Python loop over samples, no coordinate
@@ -225,7 +225,7 @@ def build_feature_matrix(
 
         parts.append(patches.reshape(N, n * n * 3))
 
-    return np.concatenate(parts, axis=1)    # (N, 417)
+    return np.concatenate(parts, axis=1)    # (N, 669)
 
 
 # ── per-sample spatial augmentation (kept per-sample: different k each time) ─
@@ -235,7 +235,7 @@ def augment_features(feat: np.ndarray, k: int, flip: bool) -> np.ndarray:
     Apply a consistent spatial augmentation across all patch inputs.
       k    : number of 90° CCW rotations (0–3)
       flip : horizontal flip after rotation
-    Operates on the 417-float colour block (feat[3:]), leaves the 3-float hint.
+    Operates on the 669-float colour block (feat[3:]), leaves the 3-float hint.
     """
     if k == 0 and not flip:
         return feat
@@ -247,13 +247,16 @@ def augment_features(feat: np.ndarray, k: int, flip: bool) -> np.ndarray:
     hint = feat[:3]
     f    = feat[3:]
     parts = [
-        transform(f[  0:243].reshape(9, 9, 3)).flatten(),
-        transform(f[243:318].reshape(5, 5, 3)).flatten(),
-        transform(f[318:345].reshape(3, 3, 3)).flatten(),
+        transform(f[  0:243].reshape(9, 9, 3)).flatten(),   # 9×9  @ 1/1
+        transform(f[243:390].reshape(7, 7, 3)).flatten(),   # 7×7  @ 1/2
+        transform(f[390:465].reshape(5, 5, 3)).flatten(),   # 5×5  @ 1/4
+        transform(f[465:513].reshape(4, 4, 3)).flatten(),   # 4×4  @ 1/8
+        transform(f[513:561].reshape(4, 4, 3)).flatten(),   # 4×4  @ 1/16
+        transform(f[561:588].reshape(3, 3, 3)).flatten(),   # 3×3  @ 1/32
+        transform(f[588:615].reshape(3, 3, 3)).flatten(),   # 3×3  @ 1/64
+        transform(f[615:642].reshape(3, 3, 3)).flatten(),   # 3×3  @ 1/128
+        transform(f[642:669].reshape(3, 3, 3)).flatten(),   # 3×3  @ 1/256
     ]
-    for idx in range(6):
-        s = 345 + idx * 12
-        parts.append(transform(f[s : s + 12].reshape(2, 2, 3)).flatten())
     return np.concatenate([hint, *parts])
 
 
@@ -336,14 +339,14 @@ def build(image_dir: str, output_path: str, samples: int, seed: int,
             use_baked_arr: np.ndarray | None = (rng.random(n_samp) < 0.5) if ao_augment else None
             use_blur_arr:  np.ndarray | None = (rng.random(n_samp) < 0.5) if blur        else None
 
-            # ── vectorised extraction → (N, 417) ─────────────────────────────
+            # ── vectorised extraction → (N, 669) ─────────────────────────────
             feats = build_feature_matrix(
                 ys_arr, xs_arr, rH, rW,
                 padded_scales, padded_baked, padded_blur0,
                 use_baked_arr, use_blur_arr,
             )
 
-            # Prepend metallicity hint → (N, 420)
+            # Prepend metallicity hint → (N, 672)
             hint_block = np.full((n_samp, 3), hint, dtype=np.float32)
             feats = np.concatenate([hint_block, feats], axis=1)
 

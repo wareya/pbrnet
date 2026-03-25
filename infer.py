@@ -4,16 +4,17 @@ infer.py
 Run the trained PBR model over every pixel of an input image and write
 out predicted maps alongside the input.
 
-Feature vector layout (369 floats) — must match build_dataset.py:
-    [  0..242]  9×9 @ 1/1    (81 px × 3 ch)
-    [243..269]  3×3 @ 1/2    ( 9 px × 3 ch)
-    [270..296]  3×3 @ 1/4    ( 9 px × 3 ch)
-    [297..308]  2×2 @ 1/8    ( 4 px × 3 ch)
-    [309..320]  2×2 @ 1/16   ( 4 px × 3 ch)
-    [321..332]  2×2 @ 1/32   ( 4 px × 3 ch)
-    [333..344]  2×2 @ 1/64   ( 4 px × 3 ch)
-    [345..356]  2×2 @ 1/128  ( 4 px × 3 ch)
-    [357..368]  2×2 @ 1/256  ( 4 px × 3 ch)
+Feature vector layout (672 floats) — must match build_dataset.py:
+    [    0..  2]  metallicity hint (3 copies, one per RGB channel)
+    [    3..245]  9×9  @ 1/1    (81 px × 3 ch = 243)
+    [  246..392]  7×7  @ 1/2    (49 px × 3 ch = 147)
+    [  393..467]  5×5  @ 1/4    (25 px × 3 ch =  75)
+    [  468..515]  4×4  @ 1/8    (16 px × 3 ch =  48)
+    [  516..563]  4×4  @ 1/16
+    [  564..590]  3×3  @ 1/32   ( 9 px × 3 ch =  27)
+    [  591..617]  3×3  @ 1/64
+    [  618..644]  3×3  @ 1/128
+    [  645..671]  3×3  @ 1/256
 
 Usage
 ─────
@@ -48,8 +49,6 @@ def pick_device(override):
 
 # ── network (must match train.py exactly) ────────────────────────────────────
 
-INPUT_DIM = 420
-
 class PBRNet(nn.Module):
     def __init__(self):
         super().__init__()
@@ -69,6 +68,22 @@ class PBRNet(nn.Module):
 # ── image helpers ─────────────────────────────────────────────────────────────
 
 SCALE_FACTORS = (1.0, 0.5, 0.25, 1/8, 1/16, 1/32, 1/64, 1/128, 1/256)
+
+# Must match PATCH_SPEC in build_dataset.py exactly.
+# (patch_size n, edge_pad, start_offset) — one entry per scale level.
+PATCH_SPEC: tuple[tuple[int, int, int], ...] = (
+    (9, 4, 0),  # 1/1   : 9×9 centred, half = 4
+    (7, 3, 0),  # 1/2   : 7×7 centred, half = 3
+    (5, 2, 0),  # 1/4   : 5×5 centred, half = 2
+    (4, 2, 1),  # 1/8   : 4×4, rows [cy_ds-1 … cy_ds+2]
+    (4, 2, 1),  # 1/16
+    (3, 1, 0),  # 1/32  : 3×3 centred, half = 1
+    (3, 1, 0),  # 1/64
+    (3, 1, 0),  # 1/128
+    (3, 1, 0),  # 1/256
+)
+
+INPUT_DIM = 3 + sum(n * n * 3 for n, _, _ in PATCH_SPEC)
 
 def load_rgb_f32(path):
     return np.array(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
@@ -100,18 +115,20 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5):
     color_full = scales[0]
     H, W = color_full.shape[:2]
 
-    # Pad full-res for 9×9 stride-trick extraction
-    p4 = pad_edge(color_full, 4)   # (H+8, W+8, 3)
+    n0, pad0, _ = PATCH_SPEC[0]
+
+    # Pad full-res for n0×n0 stride-trick extraction
+    p4 = pad_edge(color_full, pad0)   # (H+2*pad0, W+2*pad0, 3)
 
     # Pre-compute per-scale column interpolation and row coords
-    FEAT_COLS = 420
+    FEAT_COLS = INPUT_DIM
     scale_info = []
-    col = 246
+    col = 3 + n0 * n0 * 3   # slots 0-2 = hint; 3..col-1 = full-res patch
     for scale_idx, img in enumerate(scales[1:]):
         Hi, Wi = img.shape[:2]
-        if scale_idx == 0:   offsets = np.array([-2., -1., 0., 1., 2.], dtype=np.float32)
-        elif scale_idx == 1: offsets = np.array([-1., 0., 1.],          dtype=np.float32)
-        else:                offsets = np.array([-0.5, 0.5],             dtype=np.float32)
+        # Derive float sample offsets from PATCH_SPEC: positions offset-pad … offset-pad+n-1
+        n, pad, off = PATCH_SPEC[scale_idx + 1]
+        offsets = (np.arange(n, dtype=np.float32) + off - pad)
         n = len(offsets)
         width = n * n * 3
 
@@ -150,14 +167,14 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5):
 
             tf0 = time.perf_counter()
 
-            # Full-res 9×9
-            strip_p4 = p4[row_start:row_end + 8]
+            # Full-res n0×n0
+            strip_p4 = p4[row_start:row_end + 2*pad0]
             sp = strip_p4.strides
-            Xv[:, 3:246] = np.lib.stride_tricks.as_strided(
+            Xv[:, 3:3+n0*n0*3] = np.lib.stride_tricks.as_strided(
                 strip_p4,
-                shape=(n_rows, W, 9, 9, 3),
+                shape=(n_rows, W, n0, n0, 3),
                 strides=(sp[0], sp[1], sp[0], sp[1], sp[2])
-            ).reshape(N, 243)
+            ).reshape(N, n0*n0*3)
 
             for (col_interp, Hi, n, width, y0, y1, wy, col_start) in scale_info:
                 sy0 = y0[:, row_start:row_end]  # (n, n_rows)

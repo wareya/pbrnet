@@ -27,7 +27,21 @@ from safetensors.torch import load_file
 
 # ── network (must match train.py) ─────────────────────────────────────────────
 
-INPUT_DIM = 420
+# Must match PATCH_SPEC in build_dataset.py exactly.
+# (patch_size n, edge_pad, start_offset) — one entry per scale level.
+PATCH_SPEC: tuple[tuple[int, int, int], ...] = (
+    (9, 4, 0),  # 1/1   : 9×9 centred, half = 4
+    (7, 3, 0),  # 1/2   : 7×7 centred, half = 3
+    (5, 2, 0),  # 1/4   : 5×5 centred, half = 2
+    (4, 2, 1),  # 1/8   : 4×4, rows [cy_ds-1 … cy_ds+2]
+    (4, 2, 1),  # 1/16
+    (3, 1, 0),  # 1/32  : 3×3 centred, half = 1
+    (3, 1, 0),  # 1/64
+    (3, 1, 0),  # 1/128
+    (3, 1, 0),  # 1/256
+)
+
+INPUT_DIM = 3 + sum(n * n * 3 for n, _, _ in PATCH_SPEC)
 
 class PBRNet(nn.Module):
     def __init__(self):
@@ -343,20 +357,20 @@ async function mlp(wasm, feat, out, W) {
   const _h4 = new Float32Array(3);
   
   for (let x = 0; x < W; x++) {
-    // Layer 0: 420->256 LeakyReLU
+    // Layer 0: FEATURE_SIZE->256 LeakyReLU
     await matmul(wasm, feat.subarray(x*FEATURE_SIZE, x*FEATURE_SIZE + FEATURE_SIZE), FEATURE_SIZE, _h0, 256, w0, b0);
     for (let i = 0; i < 256; i++) {
-      _h0[i] = Math.max(_h0[i], Math.fround(0.01 * _h0[i]));
+      _h0[i] = Math.max(_h0[i], (0.01 * _h0[i]));
     }
     // Layer 1: 256->128 LeakyReLU
     await matmul(wasm, _h0, 256, _h1, 128, w1, b1);
     for (let i = 0; i < 128; i++) {
-      _h1[i] = Math.max(_h1[i], Math.fround(0.01 * _h1[i]));
+      _h1[i] = Math.max(_h1[i], (0.01 * _h1[i]));
     }
     // Layer 2: 128->64 LeakyReLU
     await matmul(wasm, _h1, 128, _h2, 64, w2, b2);
     for (let i = 0; i < 64; i++) {
-      _h2[i] = Math.max(_h2[i], Math.fround(0.01 * _h2[i]));
+      _h2[i] = Math.max(_h2[i], (0.01 * _h2[i]));
     }
     // Layer 3: 64->3 Sigmoid
     await matmul(wasm, _h2, 64, _h3, 3, w3, b3);
@@ -430,20 +444,20 @@ async function parallel_mlp(wasm, feat, out, W) {
         const _h4 = new Float32Array(3);
 
         for (let xi = 0; xi < chunkW; xi++) {
-          // Layer 0: 420->256 LeakyReLU
+          // Layer 0: FEATURE_SIZE->256 LeakyReLU
           matmul(feat.subarray(xi*FEATURE_SIZE, xi*FEATURE_SIZE + FEATURE_SIZE), FEATURE_SIZE, _h0, 256, weights.w0, weights.b0);
           for (let i = 0; i < 256; i++)
-            _h0[i] = Math.max(_h0[i], Math.fround(0.01 * _h0[i]));
+            _h0[i] = Math.max(_h0[i], (0.01 * _h0[i]));
 
           // Layer 1: 256->128 LeakyReLU
           matmul(_h0, 256, _h1, 128, weights.w1, weights.b1);
           for (let i = 0; i < 128; i++)
-            _h1[i] = Math.max(_h1[i], Math.fround(0.01 * _h1[i]));
+            _h1[i] = Math.max(_h1[i], (0.01 * _h1[i]));
 
           // Layer 2: 128->64 LeakyReLU
           matmul(_h1, 128, _h2, 64, weights.w2, weights.b2);
           for (let i = 0; i < 64; i++)
-            _h2[i] = Math.max(_h2[i], Math.fround(0.01 * _h2[i]));
+            _h2[i] = Math.max(_h2[i], (0.01 * _h2[i]));
 
           // Layer 3: 64->3 Sigmoid
           matmul(_h2, 64, _h3, 3, weights.w3, weights.b3);
@@ -633,29 +647,71 @@ function manualBilinear(srcData, srcW, srcH, dstW, dstH) {
   }
   return dstData;
 }
+// ── 2-Pass Separable Bilinear Patch Sampler ────────────────────────────────────
+function bilerpPatch(sc, fxc, fyc, dx_min, dx_max, dy_min, dy_max, _feat, fi, _featscratch) {
+  const w = sc.w;
+  const h = sc.h;
+  const d = sc.data;
+  const PW = dx_max - dx_min + 1; // Patch width
+  
+  // Calculate the absolute minimum and maximum integer Y rows we will need to touch
+  const y0_min = Math.floor(Math.max(0, Math.min(h - 1, fyc + dy_min)));
+  const y0_max = Math.floor(Math.max(0, Math.min(h - 1, fyc + dy_max)));
+  const Y_end = Math.min(y0_max + 1, h - 1);
 
-// ── Bilinear sample from ImageData (returns [r,g,b] in 0..1) ─────────────────
-function bilerp(scaleData, scaleW, scaleH, fy, fx) {
-  fx = Math.max(0, Math.min(scaleW - 1, fx));
-  fy = Math.max(0, Math.min(scaleH - 1, fy));
-  const x0 = Math.floor(fx), y0 = Math.floor(fy);
-  const x1 = Math.min(x0 + 1, scaleW - 1);
-  const y1 = Math.min(y0 + 1, scaleH - 1);
-  const wx = fx - x0, wy = fy - y0;
-  const d = scaleData;
-  const i00 = (y0 * scaleW + x0) * 4;
-  const i01 = (y0 * scaleW + x1) * 4;
-  const i10 = (y1 * scaleW + x0) * 4;
-  const i11 = (y1 * scaleW + x1) * 4;
-  const r = (d[i00]*(1-wy)*(1-wx) + d[i01]*(1-wy)*wx + d[i10]*wy*(1-wx) + d[i11]*wy*wx) / 255;
-  const g = (d[i00+1]*(1-wy)*(1-wx) + d[i01+1]*(1-wy)*wx + d[i10+1]*wy*(1-wx) + d[i11+1]*wy*wx) / 255;
-  const b = (d[i00+2]*(1-wy)*(1-wx) + d[i01+2]*(1-wy)*wx + d[i10+2]*wy*(1-wx) + d[i11+2]*wy*wx) / 255;
-  return [r, g, b];
+  // Pass 1: Horizontal lerp
+  // We iterate dx outside so we only compute x0, x1, and wx once per column!
+  for (let dx = dx_min; dx <= dx_max; dx++) {
+    const col_idx = dx - dx_min;
+    const fx = Math.max(0, Math.min(w - 1, fxc + dx));
+    const x0 = Math.floor(fx);
+    const x1 = Math.min(x0 + 1, w - 1);
+    const wx = fx - x0;
+    const inv_wx = 1 - wx;
+
+    for (let Y = y0_min; Y <= Y_end; Y++) {
+      const row_idx = Y - y0_min;
+      const out_idx = (row_idx * PW + col_idx) * 3;
+      
+      const y_offset = Y * w;
+      const idx0 = (y_offset + x0) * 4;
+      const idx1 = (y_offset + x1) * 4;
+
+      // Calculate horizontal lerp and store in scratch buffer
+      _featscratch[out_idx]   = d[idx0] * inv_wx + d[idx1] * wx;
+      _featscratch[out_idx+1] = d[idx0+1] * inv_wx + d[idx1+1] * wx;
+      _featscratch[out_idx+2] = d[idx0+2] * inv_wx + d[idx1+2] * wx;
+    }
+  }
+
+  // Pass 2: Vertical lerp
+  for (let dy = dy_min; dy <= dy_max; dy++) {
+    const fy = Math.max(0, Math.min(h - 1, fyc + dy));
+    const y0 = Math.floor(fy);
+    const y1 = Math.min(y0 + 1, h - 1);
+    const wy = fy - y0;
+    const inv_wy = 1 - wy;
+
+    const row0_offset = (y0 - y0_min) * PW * 3;
+    const row1_offset = (y1 - y0_min) * PW * 3;
+
+    for (let dx = dx_min; dx <= dx_max; dx++) {
+      const col_offset = (dx - dx_min) * 3;
+      const i0 = row0_offset + col_offset;
+      const i1 = row1_offset + col_offset;
+
+      // Calculate vertical lerp from scratch buffer and scale down by 255
+      _feat[fi++] = (_featscratch[i0]   * inv_wy + _featscratch[i1]   * wy) / 255;
+      _feat[fi++] = (_featscratch[i0+1] * inv_wy + _featscratch[i1+1] * wy) / 255;
+      _feat[fi++] = (_featscratch[i0+2] * inv_wy + _featscratch[i1+2] * wy) / 255;
+    }
+  }
+  
+  return fi;
 }
 
-// ── Build FEATURE_SIZE-element feature vector for one pixel ────────────────────────────
-
-function buildFeat(scales, px, py, metalHint, _feat) {
+// ── Build FEATURE_SIZE-element feature vector for one pixel ────────────────────
+function buildFeat(scales, px, py, metalHint, _feat, _featscratch) {
   const s0 = scales[0];
   const W = s0.w, H = s0.h;
   let fi = 0;
@@ -663,7 +719,7 @@ function buildFeat(scales, px, py, metalHint, _feat) {
   // hint (3 copies)
   _feat[fi++] = metalHint; _feat[fi++] = metalHint; _feat[fi++] = metalHint;
 
-  // 9x9 full-res patch (integer pixel, edge-clamped)
+  // 9x9 full-res patch (integer pixel, edge-clamped) - No bilinear scaling needed
   for (let dy = -4; dy <= 4; dy++) {
     for (let dx = -4; dx <= 4; dx++) {
       const sx = Math.max(0, Math.min(W-1, px+dx));
@@ -675,43 +731,34 @@ function buildFeat(scales, px, py, metalHint, _feat) {
     }
   }
 
-  // 5x5 @ 1/2, stride 1.0 downscaled px
+  // 7×7 @ 1/2, stride 1.0 downscaled px
   {
     const sc = scales[1];
     const fxc = px * sc.w / W, fyc = py * sc.h / H;
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const rgb = bilerp(sc.data, sc.w, sc.h, fyc+dy, fxc+dx);
-        _feat[fi++] = rgb[0]; _feat[fi++] = rgb[1]; _feat[fi++] = rgb[2];
-      }
-    }
+    fi = bilerpPatch(sc, fxc, fyc, -3, 3, -3, 3, _feat, fi, _featscratch);
   }
 
-  // 3x3 @ 1/4, stride 1.0 downscaled px
+  // 5×5 @ 1/4, stride 1.0 downscaled px
   {
     const sc = scales[2];
     const fxc = px * sc.w / W, fyc = py * sc.h / H;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        const rgb = bilerp(sc.data, sc.w, sc.h, fyc+dy, fxc+dx);
-        _feat[fi++] = rgb[0]; _feat[fi++] = rgb[1]; _feat[fi++] = rgb[2];
-      }
-    }
+    fi = bilerpPatch(sc, fxc, fyc, -2, 2, -2, 2, _feat, fi, _featscratch);
   }
 
-  // 2x2 @ 1/8 through 1/256, offsets +-0.5
-  for (let si = 3; si <= 8; si++) {
+  // 4×4 @ 1/8, 1/16 — rows [cy_ds-1 … cy_ds+2]
+  for (let si = 3; si <= 4; si++) {
     const sc = scales[si];
     const fxc = px * sc.w / W, fyc = py * sc.h / H;
-    for (let dy = -1; dy <= 1; dy += 2) {
-      for (let dx = -1; dx <= 1; dx += 2) {
-        const rgb = bilerp(sc.data, sc.w, sc.h, fyc+dy*0.5, fxc+dx*0.5);
-        _feat[fi++] = rgb[0]; _feat[fi++] = rgb[1]; _feat[fi++] = rgb[2];
-      }
-    }
+    fi = bilerpPatch(sc, fxc, fyc, -1, 2, -1, 2, _feat, fi, _featscratch);
+  }
+
+  // 3×3 @ 1/32 through 1/256, centred
+  for (let si = 5; si <= 8; si++) {
+    const sc = scales[si];
+    const fxc = px * sc.w / W, fyc = py * sc.h / H;
+    fi = bilerpPatch(sc, fxc, fyc, -1, 1, -1, 1, _feat, fi, _featscratch);
   }
 }
-
 // ── Main inference loop ───────────────────────────────────────────────────────
 let currentImg = null;
 let running = false;
@@ -876,13 +923,14 @@ async function runInference() {
   statusEl.textContent = 'Running inference... 0%';
   
   const CHUNK_L = 4;
-  const CHUNK_M = 8;
-  const CHUNK_H = 16; // rows per async chunk (keeps UI responsive)
+  const CHUNK_M = 16;
+  const CHUNK_H = 32; // rows per async chunk (keeps UI responsive)
   
   let CHUNK = CHUNK_L;
   
   const pixOut = new Float32Array(CHUNK_H * W * 3);
   const features = new Float32Array(CHUNK_H * W * FEATURE_SIZE);
+  const features_scratch = new Float32Array(CHUNK_H * W * FEATURE_SIZE);
   for (let y = 0; y < H; y += CHUNK) {
   
     CHUNK = CHUNK_L;
@@ -893,13 +941,160 @@ async function runInference() {
       CHUNK = CHUNK_H;
     }
     
-    const yEnd = Math.min(y + CHUNK, H);
-    for (let cy = y; cy < yEnd; cy++) {
-      for (let cx = 0; cx < W; cx++) {
-        let idx = cx + (cy-y)*W;
-        buildFeat(scales, cx, cy, metalHint, features.subarray(idx*FEATURE_SIZE, idx*FEATURE_SIZE + FEATURE_SIZE));
+    buildFeatChunk = (scales, y, yEnd, W, features, features_scratch) => {
+      for (let cy = y; cy < yEnd; cy++) {
+        for (let cx = 0; cx < W; cx++) {
+          let idx = cx + (cy-y)*W;
+          buildFeat(scales, cx, cy, metalHint,
+            features.subarray(idx*FEATURE_SIZE, idx*FEATURE_SIZE + FEATURE_SIZE),
+            features_scratch.subarray(idx*FEATURE_SIZE, idx*FEATURE_SIZE + FEATURE_SIZE)
+          );
+        }
       }
-    }
+    };
+
+    buildFeatChunk2 = (scales, y, yEnd, W, features, features_scratch) => {
+      const H = scales[0].h;
+
+      // ── PHASE 1: PRE-UPSAMPLE IMAGE CHUNKS INTO NEW MEMORY ────────────────────
+      const upsampledChunks = [];
+      const chunkMeta = [];
+      for (let si = 1; si <= 8; si++) {
+        const sc = scales[si];
+        
+        let dy_min = -1, dy_max = 1, dx_min = -1, dx_max = 1;
+        if (si === 1) { dy_min = -3; dy_max = 3; dx_min = -3; dx_max = 3; }
+        else if (si === 2) { dy_min = -2; dy_max = 2; dx_min = -2; dx_max = 2; }
+        else if (si === 3 || si === 4) { dy_min = -1; dy_max = 2; dx_min = -1; dx_max = 2; }
+
+        const strideX = Math.round(W / sc.w);
+        const strideY = Math.round(H / sc.h);
+
+        const minX = dx_min * strideX;
+        const maxX = (W - 1) + dx_max * strideX;
+        const minY = y + dy_min * strideY;
+        const maxY = (yEnd - 1) + dy_max * strideY;
+
+        const upW = maxX - minX + 1;
+        const upH = maxY - minY + 1;
+        
+        // Allocate new scratch memory for this upsampled chunk
+        const upData = new Float32Array(upW * upH * 3);
+        upsampledChunks[si] = upData;
+        chunkMeta[si] = { minX, minY, upW, strideX, strideY, dx_min, dx_max, dy_min, dy_max };
+
+        // Determine the range of required source rows
+        let min_fy = minY * sc.h / H;
+        min_fy = Math.max(0, Math.min(sc.h - 1, min_fy));
+        const min_y0 = Math.floor(min_fy);
+
+        let max_fy = maxY * sc.h / H;
+        max_fy = Math.max(0, Math.min(sc.h - 1, max_fy));
+        const max_y1 = Math.min(Math.floor(max_fy) + 1, sc.h - 1);
+
+        const tempH = max_y1 - min_y0 + 1;
+        const tempBuffer = new Float32Array(upW * tempH * 3);
+
+        // Pass 1: Horizontal interpolation
+        let tempIdx = 0;
+        for (let sy = min_y0; sy <= max_y1; sy++) {
+          const row_off = sy * sc.w * 4;
+          for (let X = minX; X <= maxX; X++) {
+            let fx = X * sc.w / W;
+            fx = Math.max(0, Math.min(sc.w - 1, fx));
+            const x0 = Math.floor(fx);
+            const x1 = Math.min(x0 + 1, sc.w - 1);
+            const wx = fx - x0;
+            const inv_wx = 1 - wx;
+
+            const i0 = row_off + x0 * 4;
+            const i1 = row_off + x1 * 4;
+
+            tempBuffer[tempIdx++] = (sc.data[i0] * inv_wx + sc.data[i1] * wx) / 255;
+            tempBuffer[tempIdx++] = (sc.data[i0+1] * inv_wx + sc.data[i1+1] * wx) / 255;
+            tempBuffer[tempIdx++] = (sc.data[i0+2] * inv_wx + sc.data[i1+2] * wx) / 255;
+          }
+        }
+
+        // Pass 2: Vertical interpolation
+        let idx = 0;
+        for (let Y = minY; Y <= maxY; Y++) {
+          let fy = Y * sc.h / H;
+          fy = Math.max(0, Math.min(sc.h - 1, fy));
+          const y0 = Math.floor(fy);
+          const y1 = Math.min(y0 + 1, sc.h - 1);
+          const wy = fy - y0;
+          const inv_wy = 1 - wy;
+
+          const row0_off = (y0 - min_y0) * upW * 3;
+          const row1_off = (y1 - min_y0) * upW * 3;
+
+          for (let X = 0; X < upW; X++) {
+            const i0 = row0_off + X * 3;
+            const i1 = row1_off + X * 3;
+
+            upData[idx++] = tempBuffer[i0] * inv_wy + tempBuffer[i1] * wy;
+            upData[idx++] = tempBuffer[i0+1] * inv_wy + tempBuffer[i1+1] * wy;
+            upData[idx++] = tempBuffer[i0+2] * inv_wy + tempBuffer[i1+2] * wy;
+          }
+        }
+      }
+      // ── PHASE 2: BUILD THE FEATURE VECTOR ─────────────────────────────────────
+      // Features vector is exclusively touched here once everything is prepared
+      const s0 = scales[0];
+      let fi = 0;
+
+      for (let cy = y; cy < yEnd; cy++) {
+        for (let cx = 0; cx < W; cx++) {
+          
+          // Hint (3 copies)
+          features[fi++] = metalHint;
+          features[fi++] = metalHint;
+          features[fi++] = metalHint;
+          
+          // Scale 0: 9x9 full-res patch
+          for (let dy = -4; dy <= 4; dy++) {
+            let sy = cy + dy;
+            sy = Math.max(0, Math.min(H - 1, sy));
+            const row_off = sy * W * 4;
+            
+            for (let dx = -4; dx <= 4; dx++) {
+              let sx = cx + dx;
+              sx = Math.max(0, Math.min(W - 1, sx));
+              const i = row_off + sx * 4;
+              
+              features[fi++] = s0.data[i]   / 255;
+              features[fi++] = s0.data[i+1] / 255;
+              features[fi++] = s0.data[i+2] / 255;
+            }
+          }
+          
+          // Scales 1-8: Read directly from the newly upsampled blocks
+          for (let si = 1; si <= 8; si++) {
+            const meta = chunkMeta[si];
+            const upData = upsampledChunks[si];
+            
+            for (let dy = meta.dy_min; dy <= meta.dy_max; dy++) {
+              const Y = cy + dy * meta.strideY;
+              const row_offset = (Y - meta.minY) * meta.upW;
+              
+              for (let dx = meta.dx_min; dx <= meta.dx_max; dx++) {
+                const X = cx + dx * meta.strideX;
+                const idx = (row_offset + (X - meta.minX)) * 3;
+                
+                features[fi++] = upData[idx];
+                features[fi++] = upData[idx+1];
+                features[fi++] = upData[idx+2];
+              }
+            }
+          }
+        }
+      }
+    };
+    
+    const yEnd = Math.min(y + CHUNK, H);
+    buildFeatChunk2(scales, y, yEnd, W, features, features_scratch);
+    
     for (let cy = y; cy < yEnd; cy++) {
       let idx = (cy-y)*W;
       let feat = features.subarray(idx*FEATURE_SIZE, idx*FEATURE_SIZE + FEATURE_SIZE*W);
@@ -1027,6 +1222,7 @@ statusEl.textContent = 'Weights loaded. Select an image to begin.';
 <p>For normals, use: <a href='https://github.com/HugoTini/DeepBump'>https://github.com/HugoTini/DeepBump</a></p>
 </body>
 </html>
+
 
 """
 
