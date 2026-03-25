@@ -10,6 +10,7 @@ dependencies = [
     "scipy>=1.17.1",
     "safetensors>=0.7.0",
     "packaging>=26.0",
+    "windows-curses>=2.4.1",
 ]
 
 # AMD GPU on Windows: after uv sync, follow pytorch.org to install the ROCm
