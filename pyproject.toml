@@ -8,6 +8,8 @@ dependencies = [
     "torch>=2.6.0",
     "flask>=3.0.0",
     "scipy>=1.17.1",
+    "safetensors>=0.7.0",
+    "packaging>=26.0",
 ]
 
 # AMD GPU on Windows: after uv sync, follow pytorch.org to install the ROCm
