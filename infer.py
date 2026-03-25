@@ -29,6 +29,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
+from safetensors.torch import load_file
 
 # ── device ────────────────────────────────────────────────────────────────────
 
@@ -184,7 +185,8 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5):
 
 def load_model(model_path, device):
     model = PBRNet().to(device)
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    #model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(load_file(model_path, device=str(device)))
     model.eval()
     print(f"Loaded model: {model_path}")
     return model
@@ -227,7 +229,8 @@ if __name__ == "__main__":
     import re
 
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model",   default="pbr_net.pt")
+    #ap.add_argument("--model",   default="pbr_net.pt")
+    ap.add_argument("--model",   default="pbr_net.safetensors")
     ap.add_argument("--batch",   type=int, default=65536,
                     help="Pixels per inference batch (lower if OOM)")
     ap.add_argument("--device",  default=None,

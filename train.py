@@ -8,9 +8,8 @@ Maps 303-element multi-scale colour features → (Roughness, AO, Metalness).
 GPU support:
   - NVIDIA:        works out of the box if you install the CUDA-enabled torch wheel
   - Apple Silicon: works out of the box (MPS)
-  - AMD Windows:   install ROCm + the ROCm torch wheel from pytorch.org, then
-                   it auto-detects. There is currently no pip-installable AMD
-                   GPU solution for Python 3.13 on Windows beyond ROCm.
+  - AMD Linux:     ROCm (probably requires manual installation)
+  - AMD Windows:   oh no
   - Everything else / fallback: CPU, parallelised across all cores
 
 Usage
@@ -44,7 +43,6 @@ def pick_device(override: str | None) -> torch.device:
     n = os.cpu_count() or 1
     torch.set_num_threads(n)
     print(f"Using device: CPU ({n} threads)")
-    print("  AMD Windows GPU: install ROCm and the ROCm torch wheel from pytorch.org")
     return torch.device("cpu")
 
 # ── network ───────────────────────────────────────────────────────────────────
@@ -138,7 +136,9 @@ def train(data_path, epochs, batch, lr, val_split, seed, save_path, device, weig
         marker = " ✓" if v_mse < best_val else ""
         if v_mse < best_val:
             best_val = v_mse
-            torch.save(model.state_dict(), save_path)
+            #torch.save(model.state_dict(), save_path)
+            from safetensors.torch import save_file
+            save_file(model.state_dict(), save_path)
 
         print(
             f"Epoch {epoch:3d}/{epochs}  "
@@ -161,7 +161,8 @@ if __name__ == "__main__":
     ap.add_argument("--lr",        type=float, default=2e-3)
     ap.add_argument("--val-split", type=float, default=0.1)
     ap.add_argument("--seed",      type=int,   default=0)
-    ap.add_argument("--save",      default="pbr_net.pt")
+    #ap.add_argument("--save",      default="pbr_net.pt")
+    ap.add_argument("--save",      default="pbr_net.safetensors")
     ap.add_argument("--device",    default=None,
                     help="cuda | mps | cpu  (auto-detected if omitted)")
     ap.add_argument("--weight-decay", type=float, default=1e-6,

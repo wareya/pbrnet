@@ -8,7 +8,7 @@ and view/download the results.
 Usage
 ─────
     uv run python infer_gui.py
-    uv run python infer_gui.py --model pbr_net.pt --port 7860
+    uv run python infer_gui.py --model pbr_net.safetensors --port 7860
 """
 
 import argparse
@@ -21,6 +21,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from PIL import Image
+from safetensors.torch import load_file
 from flask import Flask, request, jsonify, send_file
 
 # ── device ────────────────────────────────────────────────────────────────────
@@ -565,7 +566,8 @@ def repack_route():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--model",  default="pbr_net.pt")
+    #ap.add_argument("--model",  default="pbr_net.pt")
+    ap.add_argument("--model",  default="pbr_net.safetensors")
     ap.add_argument("--batch",  type=int, default=65536)
     ap.add_argument("--device", default=None)
     ap.add_argument("--port",   type=int, default=7860)
@@ -574,7 +576,8 @@ if __name__ == "__main__":
 
     _device = pick_device(args.device)
     _model  = PBRNet().to(_device)
-    _model.load_state_dict(torch.load(args.model, map_location=_device))
+    #_model.load_state_dict(torch.load(args.model, map_location=_device))
+    _model.load_state_dict(load_file(args.model, device=str(_device)))
     _model.eval()
     _batch  = args.batch
     print(f"Loaded model: {args.model}")

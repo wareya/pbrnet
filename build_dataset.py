@@ -133,6 +133,7 @@ def make_padded_scales(img: np.ndarray) -> list[np.ndarray]:
             prev_scaled = pil_full
             scaled = img
         else:
+            from math import floor
             sw = max(1, int(floor(W * factor)))
             sh = max(1, int(floor(H * factor)))
             prev_scaled = prev_scaled.resize((sw, sh), Image.BILINEAR)

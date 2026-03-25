@@ -12,7 +12,7 @@ The JS replicates the full inference pipeline:
 
 Usage
 ─────
-    uv run python gen_js_infer.py --model pbr_net.pt --out pbr_infer.html
+    uv run python gen_js_infer.py --model pbr_net.safetensors --out pbr_infer.html
 """
 
 import argparse
@@ -23,6 +23,7 @@ import struct
 import numpy as np
 import torch
 import torch.nn as nn
+from safetensors.torch import load_file
 
 # ── network (must match train.py) ─────────────────────────────────────────────
 
@@ -61,7 +62,8 @@ def f32_to_b64(arr):
 
 def generate(model_path, out_path):
     model = PBRNet()
-    model.load_state_dict(torch.load(model_path, map_location="cpu"))
+    #model.load_state_dict(torch.load(model_path, map_location="cpu"))
+    model.load_state_dict(load_file(model_path, device="cpu"))
     model.eval()
     layers = extract_layers(model)
 
@@ -1030,7 +1032,7 @@ statusEl.textContent = 'Weights loaded. Select an image to begin.';
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description="Generate self-contained JS inference HTML")
-    ap.add_argument("--model", required=True, help="Trained weights (.pt)")
+    ap.add_argument("--model", required=True, help="Trained weights (.safetensors)")
     ap.add_argument("--out",   default="pbr_infer.html", help="Output HTML file")
     args = ap.parse_args()
     generate(args.model, args.out)
