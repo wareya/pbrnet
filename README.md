@@ -25,7 +25,7 @@ For normals, use: https://github.com/HugoTini/DeepBump
 $ time uv run python infer.py --dir textures --pattern ".dds" --mro
 
 # or open a web UI for one-at-a-time interactive conversion
-$ uv run python infer_gui.py --model pbr_net.pt --port 7860
+$ uv run python infer_gui.py --model pbr_net.safetensors --port 7860
 
 # if you want to do training:
 $ time uv run python build_dataset.py --dir inputs/ --out dataset.npz --ao-augment --rot-flip --tint --multires --blur
