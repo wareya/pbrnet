@@ -18,6 +18,8 @@ If you REALLY want, there's a fully in-browser no-server version you can test wi
 
 You can preview the generated textures with this tool here: https://wareya.github.io/pbrnet/pbr_previewer.html
 
+Training data: https://mega.nz/file/AQ9UxCrA#01mDTIjI9ko4bxqLmmKBIHXQsLijnvP-nYsp0Vwzq_4
+
 For normals, use: https://github.com/HugoTini/DeepBump
 
 ```
