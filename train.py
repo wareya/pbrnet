@@ -94,7 +94,9 @@ def train(data_path, epochs, batch, lr, val_split, seed, save_path, device, weig
         math.exp(math.log((lr*0.033) / lr) * (1 - 0.5 * (1 + math.cos(math.pi * epoch / epochs))))
     )
     
-    loss_fn = nn.MSELoss()
+    #loss_fn = nn.MSELoss()
+    loss_fn = nn.HuberLoss(delta=0.25)
+    loss_mse = nn.MSELoss()
 
     X_val_t = torch.from_numpy(X_val).to(device)
     Y_val_t = torch.from_numpy(Y_val).to(device)
@@ -130,7 +132,7 @@ def train(data_path, epochs, batch, lr, val_split, seed, save_path, device, weig
         model.eval()
         with torch.no_grad():
             preds = model(X_val_t)
-            v_mse = loss_fn(preds, Y_val_t).item()
+            v_mse = loss_mse(preds, Y_val_t).item()
             v_mae = (preds - Y_val_t).abs().mean().item()
 
         sched.step()
@@ -143,7 +145,7 @@ def train(data_path, epochs, batch, lr, val_split, seed, save_path, device, weig
 
         print(
             f"Epoch {epoch:3d}/{epochs}  "
-            f"trn_mse={trn_loss:.5f}  "
+            f"trn_loss={trn_loss:.5f}  "
             f"val_mse={v_mse:.5f}  "
             f"val_mae={v_mae:.4f}  "
             f"lr={sched.get_last_lr()[0]:.2e}  "
@@ -158,7 +160,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--data",      required=True)
     ap.add_argument("--epochs",    type=int,   default=40)
-    ap.add_argument("--batch",     type=int,   default=512)
+    ap.add_argument("--batch",     type=int,   default=1024)
     ap.add_argument("--lr",        type=float, default=2e-3)
     ap.add_argument("--val-split", type=float, default=0.1)
     ap.add_argument("--seed",      type=int,   default=0)

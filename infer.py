@@ -276,8 +276,8 @@ if __name__ == "__main__":
     else:
         pat   = re.compile(args.pattern)
         files = sorted(
-            p for p in (os.path.join(args.dir, f) for f in os.listdir(args.dir))
-            if os.path.isfile(p) and pat.search(os.path.basename(p))
+            (p for p in (os.path.join(args.dir, f) for f in os.listdir(args.dir))
+            if os.path.isfile(p) and pat.search(os.path.basename(p))), key=str.casefold
         )
         if not files:
             print(f"No files matched pattern {args.pattern!r} in {args.dir}")

@@ -102,6 +102,8 @@
     renderer.setSize(window.innerWidth - 280, window.innerHeight);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
     const maxAnisotropy = renderer.capabilities.getMaxAnisotropy();
@@ -119,6 +121,7 @@
     
     const sun = new THREE.DirectionalLight(0xffffff, 2);
     sun.position.set(5, 5, 5);
+    sun.castShadow = true; 
     scene.add(sun);
 
     const ambient = new THREE.HemisphereLight( 0xffffff, 0x505050, 0.5);
@@ -171,7 +174,16 @@
         metalness: 0.0, 
         roughness: 0.5 
     });
+    
+    material.shadowSide = THREE.DoubleSide;
+    //sun.shadow.bias = -0.0001;
+    sun.shadow.bias = -0.0003;
+    //sun.shadow.normalBias = 0.03;
+
     const mesh = new THREE.Mesh(sphereGeom, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    
     scene.add(mesh);
 
     const handleFile = (id, prop) => {
