@@ -88,16 +88,22 @@ INPUT_DIM = 3 + sum(n * n * 3 for n, _, _ in PATCH_SPEC)
 def load_rgb_f32(path):
     return np.array(Image.open(path).convert("RGB"), dtype=np.float32) / 255.0
 
+import random
+
 def downscale(img, factor):
     from math import floor
     h, w = img.shape[:2]
     nw = max(1, int(floor(w * factor)))
     nh = max(1, int(floor(h * factor)))
     pil = Image.fromarray((img * 255).clip(0, 255).astype(np.uint8))
-    return np.array(pil.resize((nw, nh), Image.BILINEAR), dtype=np.float32) / 255.0
+    img2 = pil.resize((nw, nh), Image.BILINEAR)
+    #img2.save(f"___{factor}_{nw}_{nh}_2_.png");
+    return np.array(img2, dtype=np.float32) / 255.0
 
 def pad_edge(img, pad):
-    return np.pad(img, [(pad, pad), (pad, pad), (0, 0)], mode="edge")
+    nx = 0
+    ny = 0
+    return np.pad(img, [(pad-nx, pad+nx), (pad-ny, pad+ny), (0, 0)], mode="edge")
 
 def make_scales(img):
     result = [img]
@@ -107,11 +113,13 @@ def make_scales(img):
 
 # ── feature building + inference, row-strip by row-strip ─────────────────────
 
-def build_and_infer(model, device, batch_size, scales, metal_hint=0.5):
+def build_and_infer(model, device, batch_size, color_full, metal_hint=0.5):
     """
     scales : list of 9 images from make_scales(), index 0 = full-res.
     Returns (preds (H,W,3), t_feat, t_infer).
     """
+    scales = make_scales(color_full)
+
     color_full = scales[0]
     H, W = color_full.shape[:2]
 
@@ -134,14 +142,22 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5):
 
         # Row coords: (n, H)
         fy_c = np.arange(H, dtype=np.float32) * Hi / H
-        fy   = np.clip(fy_c[None, :] + offsets[:, None], 0.0, Hi - 1.0)
-        y0   = np.floor(fy).astype(np.int32); y1 = np.minimum(y0 + 1, Hi - 1)
+        bn = fy_c[None, :] + offsets[:, None]
+        bn -= 0.5
+        bn += (Hi / H) * 0.5
+        fy   = np.clip(bn, 0.0, Hi - 1.0)
+        y0   = np.floor(fy).astype(np.int32)
+        y1   = np.minimum(y0 + 1, Hi - 1)
         wy   = (fy - y0).astype(np.float32)
 
         # Column interpolation precomputed once: (Hi, W, n, 3)
         fx_c = np.arange(W, dtype=np.float32) * Wi / W
-        fx   = np.clip(fx_c[:, None] + offsets[None, :], 0.0, Wi - 1.0)  # (W, n)
-        x0   = np.floor(fx).astype(np.int32); x1 = np.minimum(x0 + 1, Wi - 1)
+        bn = fx_c[:, None] + offsets[None, :]
+        bn -= 0.5
+        bn += (Wi / W) * 0.5
+        fx   = np.clip(bn, 0.0, Wi - 1.0)  # (W, n)
+        x0   = np.floor(fx).astype(np.int32)
+        x1   = np.minimum(x0 + 1, Wi - 1)
         wx   = (fx - x0).astype(np.float32)
         col_interp = (img[:, x0, :] * (1 - wx)[None, :, :, None] +
                       img[:, x1, :] *      wx [None, :, :, None])  # (Hi, W, n, 3)
@@ -153,45 +169,71 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5):
     preds_out = np.empty((H, W, 3), dtype=np.float32)
     t_feat = 0.0
     t_infer = 0.0
-
+    
+    # ── debug: materialise each scale level at full resolution and save ──────────
+    # For each level the existing tables already encode a complete bilinear
+    # resample back to (H, W).  We just need the centre offset — the entry in
+    # offsets[] whose value is 0, i.e. ci = pad - off — and then:
+    #
+    #   x-axis: col_interp[row, :, ci, :]   shape (W, 3)  (already interpolated)
+    #   y-axis: y0[ci], y1[ci], wy[ci]      shape (H,)
+    #
+    #for level_idx, (col_interp, Hi, n, width, y0, y1, wy, col_start) in enumerate(scale_info):
+    #    _, pad, off = PATCH_SPEC[level_idx + 1]
+    #    ci  = pad - off                              # patch index whose offset == 0
+    #    out = np.empty((H, W, n, n, 3), dtype=np.float32)
+    #    sy0 = y0                                     # (n, H) — full image, no strip slice
+    #    sy1 = y1
+    #    swy = wy
+    #    for dyi in range(n):
+    #        r0  = sy0[dyi]
+    #        r1  = sy1[dyi]
+    #        wyr = swy[dyi, :, None, None, None]
+    #        v   = col_interp[r0] * (1 - wyr) + col_interp[r1] * wyr
+    #        out[:, :, dyi, :, :] = v
+    #    full     = out[:, :, ci, ci, :]              # (H, W, 3) — centre sample point
+    #    factor   = SCALE_FACTORS[level_idx + 1]
+    #    out_path = f"_debug_scale_{level_idx + 1}_{factor:.5f}.png"
+    #    Image.fromarray((full * 255.0).clip(0, 255).astype(np.uint8)).save(out_path)
+    #    print(f"  [debug] scale {level_idx+1}  ({Wi}×{Hi} → {W}×{H})  → {out_path}")
+    
+    
     # Pre-allocate feature buffer, reused across strips
-    X = np.empty((rows_per_strip * W, FEAT_COLS), dtype=np.float32)
-    X[:, 0:3] = metal_hint
+    featM = np.empty((rows_per_strip * W, FEAT_COLS), dtype=np.float32)
+    featM[:, 0:3] = metal_hint
 
     with torch.no_grad():
         for row_start in range(0, H, rows_per_strip):
             row_end = min(row_start + rows_per_strip, H)
             n_rows  = row_end - row_start
             N       = n_rows * W
-            Xv      = X[:N]
+            feats      = featM[:N]
 
             tf0 = time.perf_counter()
 
             # Full-res n0×n0
             strip_p4 = p4[row_start:row_end + 2*pad0]
-            sp = strip_p4.strides
-            Xv[:, 3:3+n0*n0*3] = np.lib.stride_tricks.as_strided(
+            feats[:, 3:3+n0*n0*3] = np.lib.stride_tricks.sliding_window_view(
                 strip_p4,
-                shape=(n_rows, W, n0, n0, 3),
-                strides=(sp[0], sp[1], sp[0], sp[1], sp[2])
+                window_shape=(n0, n0, 3),
             ).reshape(N, n0*n0*3)
 
             for (col_interp, Hi, n, width, y0, y1, wy, col_start) in scale_info:
                 sy0 = y0[:, row_start:row_end]  # (n, n_rows)
                 sy1 = y1[:, row_start:row_end]
                 swy = wy[:, row_start:row_end]
-                out = Xv[:, col_start:col_start+width].reshape(n_rows, W, n, n, 3)
+                out = feats[:, col_start:col_start+width].reshape(n_rows, W, n, n, 3)
                 for dyi in range(n):
                     r0  = sy0[dyi]
                     r1  = sy1[dyi]
                     wyr = swy[dyi, :, None, None, None]
-                    out[:, :, dyi, :, :] = (col_interp[r0] * (1 - wyr) +
-                                            col_interp[r1] *      wyr)
+                    v   = col_interp[r0] * (1 - wyr) + col_interp[r1] * wyr
+                    out[:, :, dyi, :, :] = v
 
             t_feat += time.perf_counter() - tf0
-
+            
             ti0 = time.perf_counter()
-            xb = torch.from_numpy(Xv).to(device)
+            xb = torch.from_numpy(feats).to(device)
             preds_out[row_start:row_end] = model(xb).clamp(0.0, 1.0).cpu().numpy().reshape(n_rows, W, 3)
             t_infer += time.perf_counter() - ti0
 
@@ -202,7 +244,6 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5):
 
 def load_model(model_path, device):
     model = PBRNet().to(device)
-    #model.load_state_dict(torch.load(model_path, map_location=device))
     model.load_state_dict(load_file(model_path, device=str(device)))
     model.eval()
     print(f"Loaded model: {model_path}")
@@ -215,9 +256,7 @@ def infer_one(image_path, model, batch_size, device, packed=None, metal_hint=0.5
     H, W = color_full.shape[:2]
     print(f"  Size: {W}×{H}")
 
-    scales = make_scales(color_full)
-
-    preds, t_feat, t_infer = build_and_infer(model, device, batch_size, scales, metal_hint)
+    preds, t_feat, t_infer = build_and_infer(model, device, batch_size, color_full, metal_hint)
     print(f"  Features: {t_feat:.2f}s   Inference: {t_infer:.2f}s   Total: {t_feat+t_infer:.2f}s")
 
     base = os.path.splitext(image_path)[0]
@@ -248,7 +287,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     #ap.add_argument("--model",   default="pbr_net.pt")
     ap.add_argument("--model",   default="pbr_net.safetensors")
-    ap.add_argument("--batch",   type=int, default=65536,
+    ap.add_argument("--batch",   type=int, default=65536//32,
                     help="Pixels per inference batch (lower if OOM)")
     ap.add_argument("--device",  default=None,
                     help="cuda | mps | cpu  (auto-detected if omitted)")
@@ -277,7 +316,7 @@ if __name__ == "__main__":
         pat   = re.compile(args.pattern)
         files = sorted(
             (p for p in (os.path.join(args.dir, f) for f in os.listdir(args.dir))
-            if os.path.isfile(p) and pat.search(os.path.basename(p))), key=str.casefold
+             if os.path.isfile(p) and pat.search(os.path.basename(p))), key=str.casefold
         )
         if not files:
             print(f"No files matched pattern {args.pattern!r} in {args.dir}")

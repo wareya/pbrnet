@@ -132,19 +132,25 @@ def build_and_infer(model, device, batch_size, scales, metal_hint=0.5, progress_
 
         # Row coords: (n, H) — needed per-strip
         fy_c = np.arange(H, dtype=np.float32) * Hi / H
-        fy   = np.clip(fy_c[None, :] + offsets[:, None], 0.0, Hi - 1.0)
-        y0   = np.floor(fy).astype(np.int32); y1 = np.minimum(y0 + 1, Hi - 1)
+        bn = fy_c[None, :] + offsets[:, None]
+        bn -= 0.5
+        bn += (Hi / H) * 0.5
+        fy   = np.clip(bn, 0.0, Hi - 1.0)
+        y0   = np.floor(fy).astype(np.int32)
+        y1   = np.minimum(y0 + 1, Hi - 1)
         wy   = (fy - y0).astype(np.float32)
 
-        # Column interpolation precomputed once: col_interp shape (Hi, W, n, 3)
-        # For each downscaled row and each full-res column, the n dx-offset samples
+        # Column interpolation precomputed once: (Hi, W, n, 3)
         fx_c = np.arange(W, dtype=np.float32) * Wi / W
-        fx   = np.clip(fx_c[:, None] + offsets[None, :], 0.0, Wi - 1.0)  # (W, n)
-        x0   = np.floor(fx).astype(np.int32); x1 = np.minimum(x0 + 1, Wi - 1)
-        wx   = (fx - x0).astype(np.float32)  # (W, n)
-        # img: (Hi, Wi, 3) → col_interp: (Hi, W, n, 3)
+        bn = fx_c[:, None] + offsets[None, :]
+        bn -= 0.5
+        bn += (Wi / W) * 0.5
+        fx   = np.clip(bn, 0.0, Wi - 1.0)  # (W, n)
+        x0   = np.floor(fx).astype(np.int32)
+        x1   = np.minimum(x0 + 1, Wi - 1)
+        wx   = (fx - x0).astype(np.float32)
         col_interp = (img[:, x0, :] * (1 - wx)[None, :, :, None] +
-                      img[:, x1, :] *      wx [None, :, :, None])
+                      img[:, x1, :] *      wx [None, :, :, None])  # (Hi, W, n, 3)
 
         scale_info.append((col_interp, Hi, n, width, y0, y1, wy, col))
         col += width

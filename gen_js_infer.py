@@ -217,7 +217,7 @@ function initWasm() {
   return ret;
 }
 
-const FEATURE_SIZE = """ + f"{INPUT_DIM}" + """;
+const FEATURE_SIZE = 672;
 
 let wasm;
 
@@ -590,7 +590,7 @@ function buildScales(imgEl) {
     const newData = manualBilinear(prev.data, prev.w, prev.h, nw, nh);
     
     // Create debug canvas
-  /*
+    /*
     const c = document.createElement('canvas');
     c.width = nw;
     c.height = nh;
@@ -598,7 +598,7 @@ function buildScales(imgEl) {
     const imgDataObj = new ImageData(newData, nw, nh);
     ctx.putImageData(imgDataObj, 0, 0);
     document.body.appendChild(c);
-  */
+    */
     
     const scaleObj = { w: nw, h: nh, data: newData };
     scales.push(scaleObj);
@@ -615,8 +615,8 @@ function manualBilinear(srcData, srcW, srcH, dstW, dstH) {
   for (let y = 0; y < dstH; y++) {
     for (let x = 0; x < dstW; x++) {
       // Pillow-style pixel centering
-      const srcX = (x + 0.5) * scaleX - 0.5;
-      const srcY = (y + 0.5) * scaleY - 0.5;
+      let srcX = (x + 0.5) * scaleX - 0.5;
+      let srcY = (y + 0.5) * scaleY - 0.5;
 
       let x0 = Math.floor(srcX);
       let y0 = Math.floor(srcY);
@@ -655,15 +655,18 @@ function bilerpPatch(sc, fxc, fyc, dx_min, dx_max, dy_min, dy_max, _feat, fi, _f
   const PW = dx_max - dx_min + 1; // Patch width
   
   // Calculate the absolute minimum and maximum integer Y rows we will need to touch
-  const y0_min = Math.floor(Math.max(0, Math.min(h - 1, fyc + dy_min)));
-  const y0_max = Math.floor(Math.max(0, Math.min(h - 1, fyc + dy_max)));
+  const y0_min = Math.floor(Math.max(0, Math.min(h - 1, fyc + dy_min - 1)));
+  const y0_max = Math.floor(Math.max(0, Math.min(h - 1, fyc + dy_max + 1)));
   const Y_end = Math.min(y0_max + 1, h - 1);
 
   // Pass 1: Horizontal lerp
   // We iterate dx outside so we only compute x0, x1, and wx once per column!
   for (let dx = dx_min; dx <= dx_max; dx++) {
     const col_idx = dx - dx_min;
-    const fx = Math.max(0, Math.min(w - 1, fxc + dx));
+    let _x = fxc + dx;
+    _x -= 0.5;
+    _x += (1.0/w) * 0.5;
+    const fx = Math.max(0, Math.min(w - 1, _x));
     const x0 = Math.floor(fx);
     const x1 = Math.min(x0 + 1, w - 1);
     const wx = fx - x0;
@@ -686,7 +689,10 @@ function bilerpPatch(sc, fxc, fyc, dx_min, dx_max, dy_min, dy_max, _feat, fi, _f
 
   // Pass 2: Vertical lerp
   for (let dy = dy_min; dy <= dy_max; dy++) {
-    const fy = Math.max(0, Math.min(h - 1, fyc + dy));
+    let _y = fyc + dy;
+    _y -= 0.5;
+    _y += (1.0/h) * 0.5;
+    const fy = Math.max(0, Math.min(h - 1, _y));
     const y0 = Math.floor(fy);
     const y1 = Math.min(y0 + 1, h - 1);
     const wy = fy - y0;
@@ -984,11 +990,11 @@ async function runInference() {
         chunkMeta[si] = { minX, minY, upW, strideX, strideY, dx_min, dx_max, dy_min, dy_max };
 
         // Determine the range of required source rows
-        let min_fy = minY * sc.h / H;
+        let min_fy = minY * sc.h / H - 1;
         min_fy = Math.max(0, Math.min(sc.h - 1, min_fy));
         const min_y0 = Math.floor(min_fy);
 
-        let max_fy = maxY * sc.h / H;
+        let max_fy = maxY * sc.h / H + 1;
         max_fy = Math.max(0, Math.min(sc.h - 1, max_fy));
         const max_y1 = Math.min(Math.floor(max_fy) + 1, sc.h - 1);
 
@@ -1001,6 +1007,8 @@ async function runInference() {
           const row_off = sy * sc.w * 4;
           for (let X = minX; X <= maxX; X++) {
             let fx = X * sc.w / W;
+            fx -= 0.5;
+            fx += (1.0/sc.w) * 0.5;
             fx = Math.max(0, Math.min(sc.w - 1, fx));
             const x0 = Math.floor(fx);
             const x1 = Math.min(x0 + 1, sc.w - 1);
@@ -1020,6 +1028,8 @@ async function runInference() {
         let idx = 0;
         for (let Y = minY; Y <= maxY; Y++) {
           let fy = Y * sc.h / H;
+          fy -= 0.5;
+          fy += (1.0/sc.h) * 0.5;
           fy = Math.max(0, Math.min(sc.h - 1, fy));
           const y0 = Math.floor(fy);
           const y1 = Math.min(y0 + 1, sc.h - 1);
@@ -1222,7 +1232,6 @@ statusEl.textContent = 'Weights loaded. Select an image to begin.';
 <p>For normals, use: <a href='https://github.com/HugoTini/DeepBump'>https://github.com/HugoTini/DeepBump</a></p>
 </body>
 </html>
-
 
 """
 

@@ -107,20 +107,17 @@ def downscale(img_f32: np.ndarray, factor: float) -> np.ndarray:
 
 def make_padded_scales(img: np.ndarray) -> list[np.ndarray]:
     """
-    Build one edge-padded image per scale level.
+    Build one edge-padded image per scale level, all at full resolution.
 
-    For each factor in SCALE_FACTORS the image is bilinearly downsampled to
-    that level's native resolution (the bilinear resampling is done once here,
-    ahead of all sample extraction).  Each result is then edge-padded so that
-    any valid ds-coordinate (cy_ds, cx_ds) can be extracted as the plain slice
+    Each partial-res level is first bilinearly downscaled to its native size
+    (for antialiasing / low-pass filtering), then bilinearly upsampled back to
+    the original (H, W).  Patch extraction can therefore use the original
+    full-res coordinates (ys, xs) directly for every level — no floor-division
+    coord remapping, no per-patch interpolation at extract time.
 
-        padded[cy_ds + offset : cy_ds + offset + n,
-               cx_ds + offset : cx_ds + offset + n]
-
-    with no clamping and no per-pixel bilinear sampling at extract time.
-
-    One PIL conversion covers all 8 partial-res levels; a single np.pad per
-    level finishes the job.
+    The cascade (each level derived from the previous downscale) matches
+    infer.py's make_scales() and preserves the correct antialiasing at each
+    octave.  Level 0 (factor 1.0) is left as-is.
     """
     H, W     = img.shape[:2]
     img_u8   = (img * 255.0).clip(0, 255).astype(np.uint8)
@@ -129,6 +126,7 @@ def make_padded_scales(img: np.ndarray) -> list[np.ndarray]:
     result: list[np.ndarray] = []
     prev_scaled = pil_full
     for factor, (_, pad, _) in zip(SCALE_FACTORS, PATCH_SPEC):
+        step = round(1.0 / factor)
         if factor == 1.0:
             prev_scaled = pil_full
             scaled = img
@@ -137,8 +135,13 @@ def make_padded_scales(img: np.ndarray) -> list[np.ndarray]:
             sw = max(1, int(floor(W * factor)))
             sh = max(1, int(floor(H * factor)))
             prev_scaled = prev_scaled.resize((sw, sh), Image.BILINEAR)
-            scaled = np.array(prev_scaled, dtype=np.float32) / 255.0
-        result.append(np.pad(scaled, [(pad, pad), (pad, pad), (0, 0)], mode='edge'))
+            # Upsample back to full resolution so all levels share the same
+            # coordinate space.  This is the bilinear filtering that infer.py
+            # was doing per-patch, hoisted to a single global operation.
+            scaled = np.array(
+                prev_scaled.resize((W, H), Image.BILINEAR), dtype=np.float32
+            ) / 255.0
+        result.append(np.pad(scaled, [(pad*step, pad*step), (pad*step, pad*step), (0, 0)], mode='edge'))
     return result
 
 
@@ -159,7 +162,6 @@ def make_padded_blur(img: np.ndarray) -> np.ndarray:
 def build_feature_matrix(
     ys: np.ndarray,                           # (N,) full-res row indices
     xs: np.ndarray,                           # (N,) full-res col indices
-    H_full: int, W_full: int,
     padded_scales: list[np.ndarray],
     padded_baked:  list[np.ndarray] | None = None,
     padded_blur0:  np.ndarray       | None = None,
@@ -169,37 +171,24 @@ def build_feature_matrix(
     """
     Vectorised batch patch extraction.  Returns (N, 669) float32.
 
-    For each of the 9 scale levels one fancy-indexed numpy read pulls all N
-    patches simultaneously — no Python loop over samples, no coordinate
-    clamping, no bilinear interpolation kernel at extract time.
-
-    Coordinate mapping (floor division):
-        cy_ds = (ys * H_ds) // H_full
-    This is always in [0, H_ds - 1] without explicit clipping, because
-        ys ≤ H_full - 1  →  (H_full-1) * H_ds // H_full ≤ H_ds - 1.
-
-    Variant mixing uses np.where rather than separate loops, so the baked
-    and blur arrays are only read where their mask is True.
+    All padded_scales images are full-res (make_padded_scales upsamples each
+    level back to (H, W) after downscaling), so ys/xs index directly into
+    every level without any coordinate remapping.
     """
     N = len(ys)
     parts: list[np.ndarray] = []
 
-    for i, ((n, pad, offset), padded) in enumerate(zip(PATCH_SPEC, padded_scales)):
-        H_ds = padded.shape[0] - 2 * pad
-        W_ds = padded.shape[1] - 2 * pad
-
-        # Map full-res coords → this level's integer ds coords (floor, always in-bounds).
-        if H_ds == H_full:          # level 0: no remapping needed
-            cy_ds: np.ndarray = ys
-            cx_ds: np.ndarray = xs
-        else:
-            cy_ds = (ys * H_ds // H_full).astype(np.int32)
-            cx_ds = (xs * W_ds // W_full).astype(np.int32)
+    for i, ((factor, (n, pad, offset)), padded) in enumerate(zip(zip(SCALE_FACTORS, PATCH_SPEC), padded_scales)):
+        step = round(1.0 / factor)
+        # All levels are full-res (downscale→upsample in make_padded_scales),
+        # so ys/xs apply directly — no coord remapping needed.
+        cy_ds: np.ndarray = ys
+        cx_ds: np.ndarray = xs
 
         # Build index grids for the n×n patch — shape (N, n, 1) and (N, 1, n).
         arange_n = np.arange(n)
-        row_idx = cy_ds[:, None, None] + offset + arange_n[None, :, None]
-        col_idx = cx_ds[:, None, None] + offset + arange_n[None, None, :]
+        row_idx = cy_ds[:, None, None] + (offset + arange_n[None, :, None]) * step
+        col_idx = cx_ds[:, None, None] + (offset + arange_n[None, None, :]) * step
 
         # Single strided read: (N, n, n, 3) — no Python loop, no clamping.
         patches = padded[row_idx, col_idx]
@@ -341,7 +330,7 @@ def build(image_dir: str, output_path: str, samples: int, seed: int,
 
             # ── vectorised extraction → (N, 669) ─────────────────────────────
             feats = build_feature_matrix(
-                ys_arr, xs_arr, rH, rW,
+                ys_arr, xs_arr,
                 padded_scales, padded_baked, padded_blur0,
                 use_baked_arr, use_blur_arr,
             )
