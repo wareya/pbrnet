@@ -34,7 +34,7 @@ $ time uv run python build_dataset.py --dir inputs/ --out dataset.npz --ao-augme
 $ time uv run python train.py --data dataset.npz --epochs=500
 ```
 
-<img width="1220" height="598" alt="image" src="https://github.com/user-attachments/assets/9c9f1b43-9116-42f1-90d2-3a709da933a1" />
+<img width="1234" height="608" alt="image" src="https://github.com/user-attachments/assets/c1f14a87-a008-4c3e-afd5-02a99602b76e" />
 
 <img width="1646" height="714" alt="explorer_2026-03-24_17-57-54" src="https://github.com/user-attachments/assets/05ee37fe-27ce-47a0-9822-23691dc97553" />
 
